@@ -2,9 +2,12 @@
   (:require [clojure.tools.cli :refer [parse-opts]]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.tools.logging :as log]
+            [clojure.core.async :refer [chan]]
             [me.raynes.fs :as fs]
             [com.stuartsierra.component :as component]
-            [leacher.config :as cfg])
+            [leacher.config :as cfg]
+            [leacher.nntp :as nntp])
   (:gen-class))
 
 ;; shutdown hooks
@@ -21,20 +24,23 @@
 ;; system
 
 (def components
-  [])
+  [:nntp])
 
 (defrecord LeacherSystem [config]
   component/Lifecycle
   (start [this]
-    (println "starting leacher")
-    (component/start-system components))
+    (log/info "starting leacher")
+    (component/start-system this components))
   (stop [this]
-    (println "stopping leacher")
-    (component/stop-system components)))
+    (log/info "stopping leacher")
+    (component/stop-system this components)))
 
 (defn new-leacher-system
   [config]
-  (map->LeacherSystem {:config config}))
+  (let [work-chan (chan 100)]
+   (map->LeacherSystem
+     {:config config
+      :nntp   (nntp/new-nntp (:nntp config) work-chan)})))
 
 ;; entry point
 
@@ -69,8 +75,9 @@
         (System/exit 0)))
 
     (let [config-file (fs/file cfg/home-dir "config.edn")
-          config      (edn/read (java.io.PushbackReader. (io/reader config-file)))
+          config      (edn/read-string (slurp (io/reader config-file)))
           system      (component/start (new-leacher-system config))]
-      (println "starting with" config)
       (on-shutdown
-        (component/stop system)))))
+        (log/info "interrupted! shutting down")
+        (component/stop system))
+      (.join (Thread/currentThread)))))
