@@ -48,10 +48,8 @@
         encoding    (encoding-from subject)
         groups      (vec (zip-xml/xml-> file :groups :group zip-xml/text))
         segments    (->> (zip-xml/xml-> file :segments :segment)
-                      (map segment->map)
-                      (map (juxt :message-id identity))
-                      (into {}))
-        total-bytes (reduce + (map (comp :bytes last) segments))]
+                         (map segment->map))
+        total-bytes (reduce + (map :bytes segments))]
     {:poster         poster
      :date           date
      :subject        subject
@@ -70,11 +68,8 @@
                          (zip-xml/xml-> :file)
                          (->> (map ->file)))
         total-bytes    (reduce + (map :total-bytes files))
-        total-segments (reduce + (map :total-segments files))
-        files-map      (->> files
-                         (map (juxt :filename identity))
-                         (into {}))]
-    {:files          files-map
+        total-segments (reduce + (map :total-segments files))]
+    {:files          files
      :total-bytes    total-bytes
      :total-segments total-segments}))
 

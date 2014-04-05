@@ -1,7 +1,7 @@
 (ns leacher.nntp
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
-            [clojure.core.async :refer [chan thread <!! >!! close!]]
+            [clojure.core.async :refer [chan thread <!! >!! close! put!]]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
             [leacher.utils :refer [parse-long]]
@@ -11,6 +11,10 @@
            (java.lang StringBuilder)))
 
 (def ENCODING "ISO-8859-1")
+
+(def DOT      (int \.))
+(def RETURN   (int \return))
+(def NEW_LINE (int \newline))
 
 (declare response)
 
@@ -27,8 +31,8 @@
   [conn ^String msg]
   (doto ^Writer (:out conn)
     (.write msg)
-    (.write (int \return))
-    (.write (int \newline))
+    (.write ^int RETURN)
+    (.write ^int NEW_LINE)
     (.flush)))
 
 (def response-re #"(\d{3}) (.*)")
@@ -48,6 +52,7 @@
   [{^BufferedReader in :in}]
   (loop [res {}]
     (let [line (.readLine in)]
+      ;; headers are terminated by a blank line
       (if (string/blank? line)
         res
         (let [[k v] (string/split line #":" 2)
@@ -57,24 +62,21 @@
 
 (defn byte-body-response
   [{^BufferedReader in :in}]
-  (let [b   (ByteArrayOutputStream.)
-        dot (int \.)
-        r   (int \return)
-        lf  (int \newline)]
+  (let [b   (ByteArrayOutputStream.)]
    (loop [previous nil]
      (let [c (.read in)]
        ;; if first char after newline is dot, check for dot-stuffing
-       (if (and (= lf previous) (= dot c))
+       (if (and (= NEW_LINE previous) (= DOT c))
          (let [c2 (.read in)]
            (condp = c2
              ;; undo dot-stuffing, throw away one dot
-             dot
+             DOT
              (do
                (.write b c2)
                (recur c))
 
              ;; end of message indicator, read and throw away crlf and return
-             r
+             RETURN
              (do
                (.read in)
                (.toByteArray b))
@@ -123,7 +125,7 @@
     (let [conn (connect cfg)]
       (with-open [socket ^Socket (:socket conn)]
         (try
-          (authenticate conn (:user cfg) (:password cfg))
+          (log/info "auth resp:" (authenticate conn (:user cfg) (:password cfg)))
           (catch Exception e
             (log/error e "failed to authenticate with nntp server" (ex-data e))
             (throw e)))
@@ -133,15 +135,22 @@
           (if-let [work (<!! work-chan)]
             (do
               (log/info "worker" n "got work" work)
-              ;; TODO - process the download. should work pass in chan
-              ;; to receive reply on?
+              (try
+                (log/info "changing group:" (group conn (-> work :file :groups first)))
+                (let [resp (article conn (-> work :segment :message-id))]
+                  (log/info "putting resp on chan" resp)
+                  (>!! (:reply work) (-> work
+                                         (dissoc :reply)
+                                         (assoc :resp resp))))
+                (catch Exception e
+                  (log/error e "failed to download segment")))
               (recur))
             (log/info "worker" n "exiting")))))))
 
 (defn start-workers
   [cfg work-chan app-state]
   (mapv #(start-worker cfg work-chan app-state %)
-    (range (:max-connections cfg))))
+        (range (:max-connections cfg))))
 
 (defrecord Nntp [cfg workers work-chan app-state]
   component/Lifecycle
@@ -164,3 +173,15 @@
   [cfg work-chan]
   (map->Nntp {:cfg       cfg
               :work-chan work-chan}))
+
+;; public
+
+(defn download
+  [nntp file]
+  (let [reply (chan)]
+    (doseq [segment (:segments file)]
+      (put! (:work-chan nntp)
+            {:reply   reply
+             :file    file
+             :segment segment}))
+    reply))
