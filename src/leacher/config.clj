@@ -9,6 +9,7 @@
                      :user     ""
                      :password ""
                      :max-connections 20}
+   :app-state       {:path (str home-dir "state.edn")}
    :dirs            {:complete (str home-dir "/complete")
                      :queue    (str home-dir "/queue")
                      :temp     (str home-dir "/tmp")}})

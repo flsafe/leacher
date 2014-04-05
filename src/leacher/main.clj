@@ -6,8 +6,9 @@
             [clojure.core.async :refer [chan]]
             [me.raynes.fs :as fs]
             [com.stuartsierra.component :as component]
-            [leacher.config :as cfg]
-            [leacher.nntp :as nntp])
+            [leacher.config :as config]
+            [leacher.nntp :as nntp]
+            [leacher.state :as state])
   (:gen-class))
 
 ;; shutdown hooks
@@ -24,9 +25,10 @@
 ;; system
 
 (def components
-  [:nntp])
+  [:app-state
+   :nntp])
 
-(defrecord LeacherSystem [config]
+(defrecord LeacherSystem [cfg]
   component/Lifecycle
   (start [this]
     (log/info "starting leacher")
@@ -36,11 +38,13 @@
     (component/stop-system this components)))
 
 (defn new-leacher-system
-  [config]
-  (let [work-chan (chan 100)]
+  [cfg]
+  (let [nntp-chan (chan 100)]
    (map->LeacherSystem
-     {:config config
-      :nntp   (nntp/new-nntp (:nntp config) work-chan)})))
+     {:cfg       cfg
+      :app-state (state/new-app-state (:app-state cfg))
+      :nntp      (component/using (nntp/new-nntp (:nntp cfg) nntp-chan)
+                   [:app-state])})))
 
 ;; entry point
 
@@ -65,18 +69,19 @@
       (println (:summary opts))
       (System/exit 0))
 
-    (when-not (fs/exists? cfg/home-dir)
-      (println "setting up leacher home directory" cfg/home-dir)
-      (fs/mkdir cfg/home-dir)
+    (when-not (fs/exists? config/home-dir)
+      (println "setting up leacher home directory" config/home-dir)
+      (fs/mkdir config/home-dir)
       (println "creating template config file")
-      (let [config-file (fs/file cfg/home-dir "config.edn")]
-        (spit config-file (pr-str cfg/template))
+      (let [config-file (fs/file config/home-dir "config.edn")]
+        (spit config-file (pr-str config/template))
         (println "please edit" (fs/absolute-path config-file))
         (System/exit 0)))
 
-    (let [config-file (fs/file cfg/home-dir "config.edn")
-          config      (edn/read-string (slurp (io/reader config-file)))
-          system      (component/start (new-leacher-system config))]
+    (let [config-file (fs/file config/home-dir "config.edn")
+          cfg         (edn/read-string (slurp (io/reader config-file)))
+          _           (log/info "starting with" cfg)
+          system      (component/start (new-leacher-system cfg))]
       (on-shutdown
         (log/info "interrupted! shutting down")
         (component/stop system))

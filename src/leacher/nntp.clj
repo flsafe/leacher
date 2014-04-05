@@ -4,23 +4,31 @@
             [clojure.core.async :refer [chan thread <!! >!! close!]]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
-            [leacher.utils :refer [parse-long]])
+            [leacher.utils :refer [parse-long]]
+            [leacher.state :as state])
   (:import (java.net Socket)
-           (java.io PrintWriter InputStreamReader BufferedReader Reader Writer)))
+           (java.io PrintWriter InputStreamReader BufferedReader Reader Writer ByteArrayOutputStream)
+           (java.lang StringBuilder)))
 
 (def ENCODING "ISO-8859-1")
 
+(declare response)
+
 (defn connect
   [{:keys [host port]}]
-  (let [socket (Socket. ^String host ^Long port)]
-    {:socket socket
-     :in     (io/reader socket :encoding ENCODING)
-     :out    (io/writer socket :encoding ENCODING)}))
+  (let [socket (Socket. ^String host ^Long port)
+        conn   {:socket socket
+                :in     (io/reader socket :encoding ENCODING)
+                :out    (io/writer socket :encoding ENCODING)}]
+    (log/info "initial response" (pr-str (response conn)))
+    conn))
 
 (defn write
-  [conn msg]
+  [conn ^String msg]
   (doto ^Writer (:out conn)
-    (.write (str msg "\r\n"))
+    (.write msg)
+    (.write (int \return))
+    (.write (int \newline))
     (.flush)))
 
 (def response-re #"(\d{3}) (.*)")
@@ -36,15 +44,45 @@
       (ex-info "error response" resp)
       resp)))
 
-(defn multiline-response
-  ([conn]
-     (multiline-response conn #"^\.$"))
-  ([{^BufferedReader in :in} terminator-re]
-     (loop [result []]
-       (let [line (.readLine in)]
-         (if (re-find terminator-re line)
-           result
-           (recur (conj result line)))))))
+(defn header-response
+  [{^BufferedReader in :in}]
+  (loop [res {}]
+    (let [line (.readLine in)]
+      (if (string/blank? line)
+        res
+        (let [[k v] (string/split line #":" 2)
+              k     (keyword (string/lower-case k))
+              v     (string/trim v)]
+              (recur (assoc res k v)))))))
+
+(defn byte-body-response
+  [{^BufferedReader in :in}]
+  (let [b   (ByteArrayOutputStream.)
+        dot (int \.)
+        r   (int \return)
+        lf  (int \newline)]
+   (loop [previous nil]
+     (let [c (.read in)]
+       ;; if first char after newline is dot, check for dot-stuffing
+       (if (and (= lf previous) (= dot c))
+         (let [c2 (.read in)]
+           (condp = c2
+             ;; undo dot-stuffing, throw away one dot
+             dot
+             (do
+               (.write b c2)
+               (recur c))
+
+             ;; end of message indicator, read and throw away crlf and return
+             r
+             (do
+               (.read in)
+               (.toByteArray b))
+
+             (throw (Exception. (str "unexpected character after '.':" c2)))))
+         (do
+           (.write b c)
+           (recur c)))))))
 
 (defn authenticate
   [conn user password]
@@ -65,23 +103,12 @@
       :high   (parse-long high)
       :group  name-of)))
 
-(defn parse-headers
-  [lines]
-  (reduce (fn [m l]
-            (let [[k v] (string/split l #":" 2)]
-              (assoc m (keyword (string/lower-case k)) (string/trim v))))
-          {} lines))
-
-(defn parse-body
-  [lines]
-  (.getBytes ^String (string/join "\r\n" lines) ^String ENCODING))
-
 (defn article
   [conn message-id]
   (write conn (str "ARTICLE " message-id))
   (let [resp    (response conn)
-        headers (parse-headers (multiline-response conn #"^ *$"))
-        bytes   (parse-body (multiline-response conn))]
+        headers (header-response conn)
+        bytes   (byte-body-response conn)]
     (assoc resp
       :headers headers
       :bytes   bytes
@@ -90,31 +117,40 @@
 ;; component
 
 (defn start-worker
-  [config work-chan n]
+  [cfg work-chan app-state n]
   (log/info "starting worker" n)
   (thread
-    (let [conn (connect config)]
+    (let [conn (connect cfg)]
       (with-open [socket ^Socket (:socket conn)]
+        (try
+          (authenticate conn (:user cfg) (:password cfg))
+          (catch Exception e
+            (log/error e "failed to authenticate with nntp server" (ex-data e))
+            (throw e)))
         (loop []
+          (state/set-state! app-state assoc-in
+                            [:nntp :workers n :status] :waiting)
           (if-let [work (<!! work-chan)]
             (do
               (log/info "worker" n "got work" work)
+              ;; TODO - process the download. should work pass in chan
+              ;; to receive reply on?
               (recur))
             (log/info "worker" n "exiting")))))))
 
 (defn start-workers
-  [config work-chan]
-  (mapv #(start-worker config work-chan %)
-    (range (:max-connections config))))
+  [cfg work-chan app-state]
+  (mapv #(start-worker cfg work-chan app-state %)
+    (range (:max-connections cfg))))
 
-(defrecord Nntp [config workers work-chan]
+(defrecord Nntp [cfg workers work-chan app-state]
   component/Lifecycle
   (start [this]
     (log/info "starting")
     (if workers
       this
       (assoc this
-        :workers (start-workers config work-chan)
+        :workers (start-workers cfg work-chan app-state)
         :work-chan work-chan)))
   (stop [this]
     (log/info "stopping")
@@ -125,12 +161,6 @@
       this)))
 
 (defn new-nntp
-  [config work-chan]
-  (map->Nntp {:config    config
+  [cfg work-chan]
+  (map->Nntp {:cfg       cfg
               :work-chan work-chan}))
-
-(comment
-
-
-
-  )

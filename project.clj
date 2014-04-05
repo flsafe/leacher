@@ -13,4 +13,6 @@
                  [com.stuartsierra/component "0.2.1"]
                  [log4j "1.2.17"]]
   :main leacher.main
-  :global-vars {*warn-on-reflection* true})
+  :profiles {:dev {:source-paths ["dev"]
+                   :global-vars {*warn-on-reflection* true}}
+             :uberjar {:aot [leacher.main]}})
