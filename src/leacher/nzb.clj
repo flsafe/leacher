@@ -63,10 +63,10 @@
 (defn parse
   [input]
   (let [files          (-> (io/input-stream input)
-                         (xml/parse startparse-sax)
-                         zip/xml-zip
-                         (zip-xml/xml-> :file)
-                         (->> (map ->file)))
+                           (xml/parse startparse-sax)
+                           zip/xml-zip
+                           (zip-xml/xml-> :file)
+                           (->> (map ->file)))
         total-bytes    (reduce + (map :total-bytes files))
         total-segments (reduce + (map :total-segments files))]
     {:files          files
@@ -76,4 +76,4 @@
 (comment
   (parse "hof.nzb")
 
-)
+  )

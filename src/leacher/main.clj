@@ -39,7 +39,7 @@
 
 (defn new-leacher-system
   [cfg]
-  (let [nntp-chan (chan 100)]
+  (let [nntp-chan (chan 1000)]
    (map->LeacherSystem
      {:cfg       cfg
       :app-state (state/new-app-state (:app-state cfg))

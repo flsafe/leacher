@@ -8,6 +8,7 @@
                  [org.clojure/core.async "0.1.267.0-0d7780-alpha"]
                  [org.clojure/tools.logging "0.2.6"]
                  [me.raynes/fs "1.4.4"]
+                 [filevents "0.1.0"]
                  [clojure-lanterna "0.9.4"]
                  [com.stuartsierra/dependency "0.1.1"]
                  [com.stuartsierra/component "0.2.1"]
