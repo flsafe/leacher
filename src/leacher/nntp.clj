@@ -1,13 +1,16 @@
 (ns leacher.nntp
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
-            [clojure.core.async :refer [chan thread <!! >!! close! put!]]
+            [clojure.core.async :as async
+             :refer [chan thread <!! >!! close! put!]]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
+            [me.raynes.fs :as fs]
             [leacher.utils :refer [parse-long]]
-            [leacher.state :as state])
+            [leacher.state :as state]
+            [leacher.decoders.yenc :as yenc])
   (:import (java.net Socket)
-           (java.io PrintWriter InputStreamReader BufferedReader Reader Writer ByteArrayOutputStream)
+           (java.io PrintWriter InputStreamReader BufferedReader Reader Writer ByteArrayOutputStream RandomAccessFile)
            (java.lang StringBuilder)))
 
 (def ENCODING "ISO-8859-1")
@@ -73,7 +76,7 @@
              DOT
              (do
                (.write b c2)
-               (recur c))
+               (recur c2))
 
              ;; end of message indicator, read and throw away crlf and return
              RETURN
@@ -136,7 +139,7 @@
             (do
               (log/info "worker" n "got work" work)
               (try
-                (log/info "changing group:" (group conn (-> work :file :groups first)))
+                (log/info (group conn (-> work :file :groups first)))
                 (let [resp (article conn (-> work :segment :message-id))]
                   (log/info "putting resp on chan" resp)
                   (>!! (:reply work) (-> work
@@ -145,7 +148,8 @@
                 (catch Exception e
                   (log/error e "failed to download segment")))
               (recur))
-            (log/info "worker" n "exiting")))))))
+            (log/info "worker" n "exiting"))))
+      (log/info "socket closing" (:socket conn)))))
 
 (defn start-workers
   [cfg work-chan app-state]
@@ -156,11 +160,12 @@
   component/Lifecycle
   (start [this]
     (log/info "starting")
-    (if workers
+    (if work-chan
       this
-      (assoc this
-        :workers (start-workers cfg work-chan app-state)
-        :work-chan work-chan)))
+      (let [work-chan (chan)]
+        (assoc this
+          :workers (start-workers cfg work-chan app-state)
+          :work-chan work-chan))))
   (stop [this]
     (log/info "stopping")
     (if workers
@@ -170,18 +175,44 @@
       this)))
 
 (defn new-nntp
-  [cfg work-chan]
-  (map->Nntp {:cfg       cfg
-              :work-chan work-chan}))
+  [cfg]
+  (map->Nntp {:cfg cfg}))
 
 ;; public
 
+(defn decode-segment
+  [{:keys [output] :as file} segment]
+  (let [^RandomAccessFile output output
+        {:keys [keywords bytes]} (yenc/decode-segment (:file segment))
+        begin (-> keywords :part :begin dec)
+        end   (-> keywords :part :end dec)]
+    (log/info "decoding" begin "->" end)
+    (.seek output begin)
+    (.write output ^bytes bytes)
+    file))
+
+(defn download-segment
+  [dir {:keys [resp segment] :as res}]
+  (let [f (io/file dir (:message-id segment))]
+    (try
+      (io/copy (:bytes resp) f)
+      (assoc res :file f)
+      (catch Exception e
+        (log/error e "failed to write segment")
+        (assoc res :error e)))))
+
 (defn download
-  [nntp file]
-  (let [reply (chan)]
-    (doseq [segment (:segments file)]
+  [nntp file dir]
+  (let [reply    (chan)
+        segments (:segments file)
+        amount   (count segments)]
+    (doseq [segment segments]
       (put! (:work-chan nntp)
             {:reply   reply
              :file    file
              :segment segment}))
-    reply))
+    (let [f (RandomAccessFile. (fs/file dir (:filename file)) "rw")]
+      (->> (async/take amount reply)
+           (async/map< #(download-segment dir %))
+           (async/take amount)
+           (async/reduce decode-segment (assoc file :output f))))))

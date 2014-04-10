@@ -70,14 +70,14 @@
             \return  (recur :reading keywords)
             \newline (recur :reading keywords)
             \=       (recur :escape keywords)
-            (do (.write w i)
+            (do (.write w (int (mod (- i 42) 256)))
                 (recur :reading keywords)))
 
           :escape
           (condp = c
             \y (recur :keyword-line keywords)
             (do
-              (.write w (int (mod (- i 64) 256)))
+              (.write w (int (mod (- i 64 42) 256)))
               (recur :reading keywords)))
 
           :keyword-line

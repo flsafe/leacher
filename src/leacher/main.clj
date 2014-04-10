@@ -39,12 +39,11 @@
 
 (defn new-leacher-system
   [cfg]
-  (let [nntp-chan (chan 1000)]
-   (map->LeacherSystem
-     {:cfg       cfg
-      :app-state (state/new-app-state (:app-state cfg))
-      :nntp      (component/using (nntp/new-nntp (:nntp cfg) nntp-chan)
-                   [:app-state])})))
+  (map->LeacherSystem
+   {:cfg       cfg
+    :app-state (state/new-app-state (:app-state cfg))
+    :nntp      (component/using (nntp/new-nntp (:nntp cfg))
+                                [:app-state])}))
 
 ;; entry point
 
