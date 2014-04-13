@@ -8,7 +8,9 @@
             [com.stuartsierra.component :as component]
             [leacher.config :as config]
             [leacher.nntp :as nntp]
-            [leacher.state :as state])
+            [leacher.state :as state]
+            [leacher.watcher :as watcher]
+            [leacher.conductor :as conductor])
   (:gen-class))
 
 ;; shutdown hooks
@@ -26,7 +28,9 @@
 
 (def components
   [:app-state
-   :nntp])
+   :nntp
+   :watcher
+   :conductor])
 
 (defrecord LeacherSystem [cfg]
   component/Lifecycle
@@ -42,8 +46,11 @@
   (map->LeacherSystem
    {:cfg       cfg
     :app-state (state/new-app-state (:app-state cfg))
+    :watcher   (watcher/new-watcher (-> cfg :dirs :queue))
     :nntp      (component/using (nntp/new-nntp (:nntp cfg))
-                                [:app-state])}))
+                                [:app-state])
+    :conductor (component/using (conductor/new-conductor cfg)
+                                [:app-state :watcher :nntp])}))
 
 ;; entry point
 
@@ -85,3 +92,12 @@
         (log/info "interrupted! shutting down")
         (component/stop system))
       (.join (Thread/currentThread)))))
+
+;; nzb file added to queue dir
+;; parse nzb
+;; add each file in nzb to nntp work channel
+;;   return channel for results
+;;   n concurrent connections work away to download putting results on reply channel
+;; pipe results from return channel
+;; n workers waiting for decoding work
+;; single worker to combine decoded

@@ -27,7 +27,7 @@
         conn   {:socket socket
                 :in     (io/reader socket :encoding ENCODING)
                 :out    (io/writer socket :encoding ENCODING)}]
-    (log/info "initial response" (pr-str (response conn)))
+    (log/info "initial response" (response conn))
     conn))
 
 (defn write
@@ -91,14 +91,17 @@
 
 (defn authenticate
   [conn user password]
+  (log/info "authenticating user")
   (write conn (str "AUTHINFO USER " user))
   (let [resp (response conn)]
     (when (<= 300 (:code resp) 399)
+      (log/info "authenticating password")
       (write conn (str "AUTHINFO PASS " password))
       (response conn))))
 
 (defn group
   [conn name-of]
+  (log/info "switching group to" name-of)
   (write conn (str "GROUP " name-of))
   (let [resp              (response conn)
         [number low high] (string/split (:body resp) #" ")]
@@ -110,6 +113,7 @@
 
 (defn article
   [conn message-id]
+  (log/info "downloading article" message-id)
   (write conn (str "ARTICLE " message-id))
   (let [resp    (response conn)
         headers (header-response conn)
@@ -121,35 +125,38 @@
 
 ;; component
 
+(defn authenticated?
+  [conn {:keys [user password]}]
+  (try
+    (log/info (authenticate conn user password))
+    true
+    (catch Exception e
+      (log/error e "failed to authenticate with nntp server" (ex-data e))
+      false)))
+
 (defn start-worker
   [cfg work-chan app-state n]
   (log/info "starting worker" n)
   (thread
     (let [conn (connect cfg)]
       (with-open [socket ^Socket (:socket conn)]
-        (try
-          (log/info "auth resp:" (authenticate conn (:user cfg) (:password cfg)))
-          (catch Exception e
-            (log/error e "failed to authenticate with nntp server" (ex-data e))
-            (throw e)))
-        (loop []
-          (state/set-state! app-state assoc-in
-                            [:nntp :workers n :status] :waiting)
-          (if-let [work (<!! work-chan)]
-            (do
-              (log/info "worker" n "got work" work)
-              (try
-                (log/info (group conn (-> work :file :groups first)))
-                (let [resp (article conn (-> work :segment :message-id))]
-                  (log/info "putting resp on chan" resp)
-                  (>!! (:reply work) (-> work
-                                         (dissoc :reply)
-                                         (assoc :resp resp))))
-                (catch Exception e
-                  (log/error e "failed to download segment")))
-              (recur))
-            (log/info "worker" n "exiting"))))
-      (log/info "socket closing" (:socket conn)))))
+        (when (authenticated? conn cfg)
+          (loop []
+            (if-let [work (<!! work-chan)]
+              (do
+                (log/info "worker" n "got work")
+                (try
+                  (group conn (-> work :file :groups first))
+                  (let [resp (article conn (-> work :segment :message-id))]
+                    (log/info "putting resp on reply chan")
+                    (>!! (:reply work) (-> work
+                                           (dissoc :reply)
+                                           (assoc :resp resp))))
+                  (catch Exception e
+                    (log/error e "failed to download segment")))
+                (recur))
+              (log/info "worker" n "exiting")))))
+      (log/info "socket closing for worker" n))))
 
 (defn start-workers
   [cfg work-chan app-state]
@@ -159,19 +166,19 @@
 (defrecord Nntp [cfg workers work-chan app-state]
   component/Lifecycle
   (start [this]
-    (log/info "starting")
-    (if work-chan
+    (if workers
       this
       (let [work-chan (chan)]
+        (log/info "starting")
         (assoc this
           :workers (start-workers cfg work-chan app-state)
           :work-chan work-chan))))
   (stop [this]
-    (log/info "stopping")
     (if workers
       (do
+        (log/info "stopping")
         (close! work-chan)
-        (dissoc this :workers :work-chan))
+        (assoc this :workers nil :work-chan nil))
       this)))
 
 (defn new-nntp
@@ -180,39 +187,82 @@
 
 ;; public
 
-(defn decode-segment
-  [{:keys [output] :as file} segment]
-  (let [^RandomAccessFile output output
-        {:keys [keywords bytes]} (yenc/decode-segment (:file segment))
-        begin (-> keywords :part :begin dec)
-        end   (-> keywords :part :end dec)]
-    (log/info "decoding" begin "->" end)
-    (.seek output begin)
-    (.write output ^bytes bytes)
-    file))
-
-(defn download-segment
-  [dir {:keys [resp segment] :as res}]
-  (let [f (io/file dir (:message-id segment))]
-    (try
-      (io/copy (:bytes resp) f)
-      (assoc res :file f)
-      (catch Exception e
-        (log/error e "failed to write segment")
-        (assoc res :error e)))))
-
 (defn download
-  [nntp file dir]
-  (let [reply    (chan)
-        segments (:segments file)
-        amount   (count segments)]
+  [nntp file]
+  (let [replies  (chan)
+        segments (:segments file)]
     (doseq [segment segments]
       (put! (:work-chan nntp)
-            {:reply   reply
+            {:reply   replies
              :file    file
              :segment segment}))
-    (let [f (RandomAccessFile. (fs/file dir (:filename file)) "rw")]
-      (->> (async/take amount reply)
-           (async/map< #(download-segment dir %))
-           (async/take amount)
-           (async/reduce decode-segment (assoc file :output f))))))
+    replies))
+
+
+;; move below somewhere else
+
+
+
+;; (defn write-decoded
+;;   [res ^RandomAccessFile output]
+;;   (let [begin (-> res :decoded :keywords :part :begin dec)
+;;         end   (-> res :decoded :keywords :part :end dec)]
+;;     (try
+;;       (log/infof "writing decoded segment %d:%d" begin end)
+;;       (.seek output begin)
+;;       (.write output ^bytes (-> res :decoded :bytes))
+;;       res
+;;       (catch Exception e
+;;         (log/errorf e "failed to write decoded segment %d:%d" begin end)
+;;         (assoc res :error e)))))
+
+;; (defn decode-segment
+;;   [res]
+;;   (log/info "decoding" (-> res :segment :message-id))
+;;   (assoc res :decoded (yenc/decode-segment (:file res))))
+
+;; (defn write-segment
+;;   [res dir]
+;;   (try
+;;     (let [bytes (-> res :resp :bytes)
+;;           file  (io/file dir (-> res :segment :message-id))]
+;;       (log/infof "writing %d bytes to %s" (count bytes) (fs/absolute-path file))
+;;       (io/copy bytes file)
+;;       (assoc res :file file))
+;;     (catch Exception e
+;;       (log/error e "failed to write segment"))))
+
+;; (defn segment-decoded-writer
+;;   [in out]
+;;   (thread
+;;     (loop []
+;;       (if-let [v (<!! in)]
+;;         (let [v (write-decoded v )])
+;;         (let [file    (:file v)
+;;               decoded (yenc/decode-segment file)]
+;;           (>!! out (assoc v :decoded decoded)))
+;;         (log/info "segment decoder exiting")))))
+
+;; (defn segment-decoder
+;;   [in out]
+;;   (thread
+;;     (loop []
+;;       (if-let [v (<!! in)]
+;;         (let [file    (:file v)
+;;               decoded (yenc/decode-segment file)]
+;;           (>!! out (assoc v :decoded decoded))
+;;           (recur))
+;;         (log/info "segment decoder exiting")))))
+
+;; (defn segment-writer
+;;   [in out dir]
+;;   (thread
+;;     (loop []
+;;       (if-let [v (<!! in)]
+;;         (let [bytes (-> v :resp :bytes)
+;;               file  (io/file dir (-> v :segment :message-id))]
+;;           (log/infof "writing %d bytes to %s" (count bytes) (fs/absolute-path file))
+;;           (io/copy bytes file)
+;;           (>!! out (assoc v :file file))
+;;           (recur))
+;;         (log/info "segment writer exiting")))))

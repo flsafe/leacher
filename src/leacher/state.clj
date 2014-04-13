@@ -37,8 +37,9 @@
   (stop [component]
     (if state
       (do
+        (log/info "stopping")
         (write-state cfg state)
-        (dissoc component :state))
+        (assoc component :state nil))
       component)))
 
 (defn new-app-state
