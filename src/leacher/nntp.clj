@@ -204,7 +204,8 @@
         segments (:segments file)]
     (doseq [segment segments]
       (put! (:work-chan nntp)
-            {:reply   replies
-             :file    file
-             :segment segment}))
+            {:reply      replies
+             :file       file
+             :segment    segment
+             :started-at (java.util.Date.)}))
     replies))

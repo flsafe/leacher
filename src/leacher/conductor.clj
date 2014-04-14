@@ -1,4 +1,4 @@
-(ns leacher.conductor
+dec(ns leacher.conductor
   (:require [com.stuartsierra.component :as component]
             [clojure.tools.logging :as log]
             [clojure.core.async :as async :refer [chan >!! <!! thread alt!!]]
@@ -27,15 +27,10 @@
              (when v
                (try
                  (logt "decoding file:" (str (:segment-file v))
-                   (let [file    (io/file (-> cfg :dirs :complete)
-                                          (:filename (:file v)))
-                         _       (io/make-parents file)
-                         output  (RandomAccessFile. file "rw")
-                         decoded (yenc/decode-segment (:segment-file v))
-                         begin   (-> decoded :keywords :part :begin dec)
-                         end     (-> decoded :keywords :part :end dec)]
-                     (.seek output begin)
-                     (.write output ^bytes (:bytes decoded))))
+                   (let [file    (io/file (-> cfg :dirs :complete) (-> v :file :filename))
+                         seg-file (:segment-file v)]
+                     (io/make-parents file)
+                     (yenc/decode-to seg-file file)))
                  (catch Exception e
                    (log/error e "failed to decode segment")))
                (recur)))
@@ -65,13 +60,13 @@
             ([v]
                (when v
                  (try
-                   (log/infof "writer[%d]: received segment to write" n)
                    (let [dir  (-> cfg :dirs :temp)
                          file (io/file dir (-> v :segment :message-id))]
-                     (log/infof "writer[%d]: writing segment to %s" n (str file))
-                     (io/copy (-> v :resp :bytes) file)
-                     (>!! (:out channels)
-                          (assoc v :segment-file file)))
+                     (logt
+                       (format "writer[%d]: writing segment to %s" n (str file))
+                       (io/copy (-> v :resp :bytes) file)
+                       (>!! (:out channels)
+                            (assoc v :segment-file file))))
                    (catch Exception e
                      (log/errorf e "writer[%d]: failed to write segment" n)))
                  (recur)))

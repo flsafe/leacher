@@ -88,6 +88,15 @@
                   :bytes    (.toByteArray w)}
               \p (recur :reading (assoc keywords :part values)))))))))
 
+(defn decode-to
+  [seg-file file]
+  (let [output  (RandomAccessFile. ^java.io.File file "rw")
+        decoded (decode-segment seg-file)
+        begin   (-> decoded :keywords :part :begin dec)
+        end     (-> decoded :keywords :part :end dec)]
+    (.seek output begin)
+    (.write output ^bytes (:bytes decoded))))
+
 (defn valid-segment?
   [{:keys [keywords bytes] :as segment}]
   (let [begin (:begin keywords)
