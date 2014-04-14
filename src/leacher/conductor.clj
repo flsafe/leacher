@@ -4,6 +4,7 @@
             [clojure.core.async :as async :refer [chan >!! <!! thread alt!!]]
             [clojure.java.io :as io]
             [me.raynes.fs :as fs]
+            [leacher.utils :refer [logt]]
             [leacher.state :as state]
             [leacher.watcher :as watcher]
             [leacher.nntp :as nntp]
@@ -23,57 +24,61 @@
         (alt!!
           (:in channels)
           ([v]
-             (try
-               (log/info "starting to decode file:" (str (:segment-file v)))
-               (let [seg-file (:segment-file v)
-                     file     (io/file (fs/parent seg-file) (:filename (:file v)))
-                     output   (RandomAccessFile. file "rw")
-                     decoded  (yenc/decode-segment seg-file)
-                     begin    (-> decoded :keywords :part :begin dec)
-                     end      (-> decoded :keywords :part :end dec)]
-                 (.seek output begin)
-                 (.write output ^bytes (:bytes decoded)))
-               (catch Exception e
-                 (log/error e "failed to decode segment")))
-             (recur))
+             (when v
+               (try
+                 (logt "decoding file:" (str (:segment-file v))
+                   (let [file    (io/file (-> cfg :dirs :complete)
+                                          (:filename (:file v)))
+                         _       (io/make-parents file)
+                         output  (RandomAccessFile. file "rw")
+                         decoded (yenc/decode-segment (:segment-file v))
+                         begin   (-> decoded :keywords :part :begin dec)
+                         end     (-> decoded :keywords :part :end dec)]
+                     (.seek output begin)
+                     (.write output ^bytes (:bytes decoded))))
+                 (catch Exception e
+                   (log/error e "failed to decode segment")))
+               (recur)))
 
           (:ctl channels)
           ([_]
-             (log/info "got interupt, exiting")))))
+             (log/info "decoder got interupt, exiting")))))
     channels))
-
-(defn dir-for
-  [file cfg]
-  (let [dir (io/file (-> cfg :dirs :temp) (:filename file))]
-    (fs/mkdirs dir)
-    dir))
 
 ;; can be multiple writers safely, spin up n threads based on config
 (defn start-writer
   [cfg app-state]
-  (let [channels {:in  (chan 100)
+  (let [workers  10
+        channels {:in  (chan 100)
                   :out (chan 100)
-                  :ctl (chan)}]
+                  :ctl (chan)}
+        ctls     (mapv chan (range workers))]
     (thread
-      (loop []
-        (alt!!
-          (:in channels)
-          ([v]
-             (try
-               (log/info "received segment to write")
-               (let [dir  (dir-for (:file v) cfg)
-                     file (io/file dir (-> v :segment :message-id))]
-                 (log/info "writing segment to" (str file))
-                 (io/copy (-> v :resp :bytes) file)
-                 (>!! (:out channels)
-                      (assoc v :segment-file file)))
-               (catch Exception e
-                 (log/error e "failed to write segment")))
-             (recur))
+      (<!! (:ctl channels))
+      (doseq [ctl ctls]
+        (async/close! ctl)))
+    (dotimes [n workers]
+      (thread
+        (loop []
+          (alt!!
+            (:in channels)
+            ([v]
+               (when v
+                 (try
+                   (log/infof "writer[%d]: received segment to write" n)
+                   (let [dir  (-> cfg :dirs :temp)
+                         file (io/file dir (-> v :segment :message-id))]
+                     (log/infof "writer[%d]: writing segment to %s" n (str file))
+                     (io/copy (-> v :resp :bytes) file)
+                     (>!! (:out channels)
+                          (assoc v :segment-file file)))
+                   (catch Exception e
+                     (log/errorf e "writer[%d]: failed to write segment" n)))
+                 (recur)))
 
-          (:ctl channels)
-          ([_]
-             (log/info "got interupt, exiting")))))
+            (nth ctls n)
+            ([_]
+               (log/infof "writer[%d]: got interupt, exiting" n))))))
     channels))
 
 ;; single thread is ok, bound by no. of nntp workers will add files to
@@ -88,19 +93,19 @@
       (loop []
         (alt!!
           (:in channels)
-          ([nzb]
-             (try
-               (log/info "starting download of nzb")
-               (let [replies (mapv (partial nntp/download nntp) (:files nzb))]
-                 (doseq [r replies]
-                   (async/pipe r (:out channels) false)))
-               (catch Exception e
-                 (log/error e "failed to download nzb files")))
-             (recur))
+          ([file]
+             (when file
+               (try
+                 (log/info "starting download of file" (:filename file))
+                 (let [reply (nntp/download nntp file)]
+                   (async/pipe reply (:out channels) false))
+                 (catch Exception e
+                   (log/error e "failed to download nzb files")))
+               (recur)))
 
           (:ctl channels)
           ([_]
-             (log/info "got interupt, exiting")))))
+             (log/info "downloader got interupt, exiting")))))
     channels))
 
 ;; single thread ok, just dumping nzbs onto a channel for processing
@@ -114,17 +119,18 @@
         (alt!!
           (:in channels)
           ([f]
-             (try
-               (log/info "received nzb file:" (str f))
-               (let [nzb (nzb/parse (io/file f))]
-                 (>!! (:out channels) nzb))
-               (catch Exception e
-                 (log/error e "failed to parse nzb file")))
-             (recur))
+             (when f
+               (try
+                 (log/info "received nzb file:" (str f))
+                 (doseq [file (nzb/parse (io/file f))]
+                   (>!! (:out channels) file))
+                 (catch Exception e
+                   (log/error e "failed to parse nzb file")))
+               (recur)))
 
           (:ctl channels)
           ([_]
-             (log/info "got interupt, exiting")))))
+             (log/info "listener got interupt, exiting")))))
     channels))
 
 ;; component
@@ -137,12 +143,12 @@
                       (start-downloader cfg app-state nntp)
                       (start-writer cfg app-state)
                       (start-decoder cfg app-state)]
-            pairs (partition 2 1 channels)]
+            pairs    (partition 2 1 channels)]
         (log/info "starting")
         (doseq [[from to] pairs
                 :let [out (:out from)
                       in  (:in to)]]
-          (async/pipe out in))
+          (async/pipe out in false))
         (assoc this :channels channels))
       this))
 

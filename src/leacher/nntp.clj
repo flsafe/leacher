@@ -2,7 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
             [clojure.core.async :as async
-             :refer [chan thread <!! >!! close! put!]]
+             :refer [chan thread <!! >!! close! put! alt!!]]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
             [me.raynes.fs :as fs]
@@ -135,50 +135,61 @@
       false)))
 
 (defn start-worker
-  [cfg work-chan app-state n]
+  [cfg work-chan ctl app-state n]
   (log/info "starting worker" n)
   (thread
     (let [conn (connect cfg)]
       (with-open [socket ^Socket (:socket conn)]
         (when (authenticated? conn cfg)
           (loop []
-            (if-let [work (<!! work-chan)]
-              (do
-                (log/info "worker" n "got work")
-                (try
-                  (group conn (-> work :file :groups first))
-                  (let [resp (article conn (-> work :segment :message-id))]
-                    (log/info "putting resp on reply chan")
-                    (>!! (:reply work) (-> work
-                                           (dissoc :reply)
-                                           (assoc :resp resp))))
-                  (catch Exception e
-                    (log/error e "failed to download segment")))
-                (recur))
-              (log/info "worker" n "exiting")))))
-      (log/info "socket closing for worker" n))))
+            (alt!!
+              work-chan
+              ([work]
+                 (if work
+                   (do
+                     (log/infof "worker[%d] got work" n)
+                     (try
+                       (group conn (-> work :file :groups first))
+                       (let [resp (article conn (-> work :segment :message-id))]
+                         (log/infof "worker[%d] putting resp on reply chan" n)
+                         (>!! (:reply work) (-> work
+                                                (dissoc :reply)
+                                                (assoc :resp resp))))
+                       (catch Exception e
+                         (log/errorf e "worker[%d] failed to download segment" n)))
+                     (recur))
+                   (log/infof "worker[%d] exiting" n)))
+
+              ctl
+              ([_]
+                 (log/infof "worker[%d] got interupt" n))))))
+      (log/infof "worker[%d] socket closing" n))))
 
 (defn start-workers
-  [cfg work-chan app-state]
-  (mapv #(start-worker cfg work-chan app-state %)
+  [cfg work-chan ctls app-state]
+  (mapv #(start-worker cfg work-chan (nth ctls %) app-state %)
         (range (:max-connections cfg))))
 
-(defrecord Nntp [cfg workers work-chan app-state]
+(defrecord Nntp [cfg workers work-chan app-state ctls]
   component/Lifecycle
   (start [this]
     (if workers
       this
-      (let [work-chan (chan)]
+      (let [ctls      (mapv chan (range (:max-connections cfg)))
+            work-chan (chan)]
         (log/info "starting")
         (assoc this
-          :workers (start-workers cfg work-chan app-state)
-          :work-chan work-chan))))
+          :workers (start-workers cfg work-chan ctls app-state)
+          :work-chan work-chan
+          :ctls ctls))))
   (stop [this]
     (if workers
       (do
         (log/info "stopping")
         (close! work-chan)
-        (assoc this :workers nil :work-chan nil))
+        (doseq [ctl ctls]
+          (close! ctl))
+        (assoc this :workers nil :work-chan nil :ctls nil))
       this)))
 
 (defn new-nntp
@@ -197,72 +208,3 @@
              :file    file
              :segment segment}))
     replies))
-
-
-;; move below somewhere else
-
-
-
-;; (defn write-decoded
-;;   [res ^RandomAccessFile output]
-;;   (let [begin (-> res :decoded :keywords :part :begin dec)
-;;         end   (-> res :decoded :keywords :part :end dec)]
-;;     (try
-;;       (log/infof "writing decoded segment %d:%d" begin end)
-;;       (.seek output begin)
-;;       (.write output ^bytes (-> res :decoded :bytes))
-;;       res
-;;       (catch Exception e
-;;         (log/errorf e "failed to write decoded segment %d:%d" begin end)
-;;         (assoc res :error e)))))
-
-;; (defn decode-segment
-;;   [res]
-;;   (log/info "decoding" (-> res :segment :message-id))
-;;   (assoc res :decoded (yenc/decode-segment (:file res))))
-
-;; (defn write-segment
-;;   [res dir]
-;;   (try
-;;     (let [bytes (-> res :resp :bytes)
-;;           file  (io/file dir (-> res :segment :message-id))]
-;;       (log/infof "writing %d bytes to %s" (count bytes) (fs/absolute-path file))
-;;       (io/copy bytes file)
-;;       (assoc res :file file))
-;;     (catch Exception e
-;;       (log/error e "failed to write segment"))))
-
-;; (defn segment-decoded-writer
-;;   [in out]
-;;   (thread
-;;     (loop []
-;;       (if-let [v (<!! in)]
-;;         (let [v (write-decoded v )])
-;;         (let [file    (:file v)
-;;               decoded (yenc/decode-segment file)]
-;;           (>!! out (assoc v :decoded decoded)))
-;;         (log/info "segment decoder exiting")))))
-
-;; (defn segment-decoder
-;;   [in out]
-;;   (thread
-;;     (loop []
-;;       (if-let [v (<!! in)]
-;;         (let [file    (:file v)
-;;               decoded (yenc/decode-segment file)]
-;;           (>!! out (assoc v :decoded decoded))
-;;           (recur))
-;;         (log/info "segment decoder exiting")))))
-
-;; (defn segment-writer
-;;   [in out dir]
-;;   (thread
-;;     (loop []
-;;       (if-let [v (<!! in)]
-;;         (let [bytes (-> v :resp :bytes)
-;;               file  (io/file dir (-> v :segment :message-id))]
-;;           (log/infof "writing %d bytes to %s" (count bytes) (fs/absolute-path file))
-;;           (io/copy bytes file)
-;;           (>!! out (assoc v :file file))
-;;           (recur))
-;;         (log/info "segment writer exiting")))))
