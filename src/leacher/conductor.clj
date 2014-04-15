@@ -12,148 +12,123 @@ dec(ns leacher.conductor
             [leacher.decoders.yenc :as yenc])
   (:import [java.io RandomAccessFile]))
 
-;; can be multiple decoders, but need to ensure that segments from same
-;; file are all processed by same thread? OR reduce the written segments
-;; to a single value that gets read by this?
-(defn start-decoder
-  [cfg app-state]
-  (let [channels {:in  (chan 100)
-                  :ctl (chan)}]
-    (thread
-      (loop []
-        (alt!!
-          (:in channels)
-          ([v]
-             (when v
-               (try
-                 (logt "decoding file:" (str (:segment-file v))
-                   (let [file    (io/file (-> cfg :dirs :complete) (-> v :file :filename))
-                         seg-file (:segment-file v)]
-                     (io/make-parents file)
-                     (yenc/decode-to seg-file file)))
-                 (catch Exception e
-                   (log/error e "failed to decode segment")))
-               (recur)))
-
-          (:ctl channels)
-          ([_]
-             (log/info "decoder got interupt, exiting")))))
-    channels))
-
-;; can be multiple writers safely, spin up n threads based on config
-(defn start-writer
-  [cfg app-state]
-  (let [workers  10
-        channels {:in  (chan 100)
-                  :out (chan 100)
-                  :ctl (chan)}
-        ctls     (mapv chan (range workers))]
+(defn worker
+  [body-fn & {:keys [workers channels]
+              :or   {workers  1
+                     channels {:in  (chan 100)
+                               :out (chan 100)
+                               :ctl (chan)}}}]
+  (let [ctls (mapv chan (range workers))]
     (thread
       (<!! (:ctl channels))
-      (doseq [ctl ctls]
-        (async/close! ctl)))
+      (dotimes [n workers]
+        (async/close! (nth ctls n))))
     (dotimes [n workers]
       (thread
         (loop []
           (alt!!
             (:in channels)
-            ([v]
-               (when v
+            ([val]
+               (when val
                  (try
-                   (let [dir  (-> cfg :dirs :temp)
-                         file (io/file dir (-> v :segment :message-id))]
-                     (logt
-                       (format "writer[%d]: writing segment to %s" n (str file))
-                       (io/copy (-> v :resp :bytes) file)
-                       (>!! (:out channels)
-                            (assoc v :segment-file file))))
+                   (body-fn n channels val)
                    (catch Exception e
-                     (log/errorf e "writer[%d]: failed to write segment" n)))
+                     (log/errorf e "worker[%d]: error" n)))
                  (recur)))
 
             (nth ctls n)
             ([_]
-               (log/infof "writer[%d]: got interupt, exiting" n))))))
+               (log/infof "worker[%d]: shutdown" n))))))
     channels))
 
-;; single thread is ok, bound by no. of nntp workers will add files to
-;; download and return immediately. pipe replies from channel returned
-;; by nntp onto :out channel
+;; TODO: how do we know when we are "done" with downloading a files segments?
+;; move completed file to complete dir
+;; mv .nzb file to complete dir?
+
+(defn start-cleaner
+  [cfg app-state]
+  (worker (fn [n channels val]
+            (let [seg-file (:segment-file val)]
+              (log/info "cleaning up" (str seg-file))
+              (fs/delete seg-file)))))
+
+(defn start-segment-combiner
+  [cfg app-state]
+  (worker (fn [_ channels val]
+            (let [file (io/file (-> cfg :dirs :temp) (-> val :file :filename))]
+              (io/make-parents file)
+              (yenc/decode-to (:decoded-segment val) file)
+              (>!! (:out channels)
+                   (assoc val :decoded-file file))))))
+
+(defn start-decoder
+  [cfg app-state]
+  (worker (fn [n channels val]
+            (logt (format "decoder[%d]: decoding file:"
+                          n (str (:segment-file val)))
+              (let [seg-file (:segment-file val)
+                    decoded  (yenc/decode-segment seg-file)]
+                (>!! (:out channels)
+                     (assoc val :decoded-segment decoded)))))
+          :workers 10))
+
+(defn start-writer
+  [cfg app-state]
+  (worker (fn [n channels val]
+            (let [dir  (-> cfg :dirs :temp)
+                  file (io/file dir (-> val :segment :message-id))]
+              (logt (format "writer[%d]: writing segment to %s" n (str file))
+                (io/copy (-> val :resp :bytes) file)
+                (>!! (:out channels)
+                     (assoc val :segment-file file)))))
+          :workers 10))
+
 (defn start-downloader
   [cfg app-state nntp]
-  (let [channels {:in  (chan 100)
-                  :out (chan 100)
-                  :ctl (chan)}]
-    (thread
-      (loop []
-        (alt!!
-          (:in channels)
-          ([file]
-             (when file
-               (try
-                 (log/info "starting download of file" (:filename file))
-                 (let [reply (nntp/download nntp file)]
-                   (async/pipe reply (:out channels) false))
-                 (catch Exception e
-                   (log/error e "failed to download nzb files")))
-               (recur)))
+  (worker (fn [n channels val]
+            (log/info "starting download of file" (:filename val))
+            (let [reply (nntp/download nntp val)]
+              (async/pipe reply (:out channels) false)))))
 
-          (:ctl channels)
-          ([_]
-             (log/info "downloader got interupt, exiting")))))
-    channels))
-
-;; single thread ok, just dumping nzbs onto a channel for processing
 (defn start-listener
-  [cfg app-state in]
-  (let [channels {:in  in
-                  :out (chan)
-                  :ctl (chan)}]
-    (thread
-      (loop []
-        (alt!!
-          (:in channels)
-          ([f]
-             (when f
-               (try
-                 (log/info "received nzb file:" (str f))
-                 (doseq [file (nzb/parse (io/file f))]
-                   (>!! (:out channels) file))
-                 (catch Exception e
-                   (log/error e "failed to parse nzb file")))
-               (recur)))
-
-          (:ctl channels)
-          ([_]
-             (log/info "listener got interupt, exiting")))))
-    channels))
+  [cfg app-state]
+  (worker (fn [n channels path]
+            (log/info "received nzb file:" path)
+            (doseq [file (nzb/parse (io/file path))]
+              (>!! (:out channels)
+                   (assoc file :nzb-file file))))))
 
 ;; component
 
-(defrecord Conductor [cfg app-state watcher nntp channels]
+(defrecord Conductor [cfg app-state watcher nntp ctls]
   component/Lifecycle
   (start [this]
-    (if-not channels
-      (let [channels [(start-listener cfg app-state (:events watcher))
-                      (start-downloader cfg app-state nntp)
-                      (start-writer cfg app-state)
-                      (start-decoder cfg app-state)]
-            pairs    (partition 2 1 channels)]
+    (if-not ctls
+      (do
         (log/info "starting")
-        (doseq [[from to] pairs
-                :let [out (:out from)
-                      in  (:in to)]]
-          (async/pipe out in false))
-        (assoc this :channels channels))
+        (let [listener   (start-listener cfg app-state)
+              downloader (start-downloader cfg app-state nntp)
+              writer     (start-writer cfg app-state)
+              decoder    (start-decoder cfg app-state)
+              combiner   (start-segment-combiner cfg app-state)
+              cleaner    (start-cleaner cfg app-state)
+              ctls       (mapv :ctl [listener downloader writer decoder])]
+          (async/pipe (:events watcher) (:in listener))
+          (async/pipe (:out listener) (:in downloader))
+          (async/pipe (:out downloader) (:in writer))
+          (async/pipe (:out writer) (:in decoder))
+          (async/pipe (:out decoder) (:in combiner))
+          (async/pipe (:out combiner) (:in cleaner))
+          (assoc this :ctls ctls)))
       this))
 
   (stop [this]
-    (if channels
+    (if ctls
       (do
         (log/info "stopping")
-        (doseq [{:keys [ctl]} channels]
+        (doseq [ctl ctls]
           (async/close! ctl))
-        (assoc this :channels nil)
+        (assoc this :ctls nil)
       this))))
 
 (defn new-conductor
@@ -161,6 +136,15 @@ dec(ns leacher.conductor
   (map->Conductor {:cfg cfg}))
 
 ;; public
+
+;; 1 file -> 12 segments
+;; 10 nntp workers downloading putting results onto same channel for file
+;; pass reply channel onto writer
+;; writer takes all values off chann
+
+
+
+
 
 ;; listen for fs events
 ;; get an event, parse it into nzb map thing

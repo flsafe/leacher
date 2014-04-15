@@ -17,6 +17,7 @@
              (let [current   (set (fs/glob glob))
                    new-files (set/difference current previous)]
                (when-not (empty? new-files)
+                 (log/info "detected new files" new-files)
                  (doseq [f new-files]
                    (>!! events f)))
                (recur current)))

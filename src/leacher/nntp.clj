@@ -147,11 +147,9 @@
               ([work]
                  (if work
                    (do
-                     (log/infof "worker[%d] got work" n)
                      (try
                        (group conn (-> work :file :groups first))
                        (let [resp (article conn (-> work :segment :message-id))]
-                         (log/infof "worker[%d] putting resp on reply chan" n)
                          (>!! (:reply work) (-> work
                                                 (dissoc :reply)
                                                 (assoc :resp resp))))

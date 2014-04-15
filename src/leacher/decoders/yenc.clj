@@ -89,9 +89,8 @@
               \p (recur :reading (assoc keywords :part values)))))))))
 
 (defn decode-to
-  [seg-file file]
+  [decoded file]
   (let [output  (RandomAccessFile. ^java.io.File file "rw")
-        decoded (decode-segment seg-file)
         begin   (-> decoded :keywords :part :begin dec)
         end     (-> decoded :keywords :part :end dec)]
     (.seek output begin)
