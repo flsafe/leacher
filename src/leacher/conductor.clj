@@ -1,4 +1,4 @@
-dec(ns leacher.conductor
+(ns leacher.conductor
   (:require [com.stuartsierra.component :as component]
             [clojure.tools.logging :as log]
             [clojure.core.async :as async :refer [chan >!! <!! thread alt!!]]
@@ -13,86 +13,101 @@ dec(ns leacher.conductor
   (:import [java.io RandomAccessFile]))
 
 (defn worker
-  [body-fn & {:keys [workers channels]
-              :or   {workers  1
-                     channels {:in  (chan 100)
-                               :out (chan 100)
-                               :ctl (chan)}}}]
-  (let [ctls (mapv chan (range workers))]
+  [body-fn & {:keys [in out ctl]
+              :or   {in  (chan 100)
+                     out (chan 100)
+                     ctl (chan)}}]
+  (let [channels {:in in :out out :ctl ctl}]
     (thread
-      (<!! (:ctl channels))
-      (dotimes [n workers]
-        (async/close! (nth ctls n))))
+      (loop []
+        (alt!!
+          in
+          ([val]
+             (when val
+               (try
+                 (body-fn channels val)
+                 (catch Exception e
+                   (log/error e "worker: error")))
+               (recur)))
+
+          ctl
+          ([_]
+             (log/infof "worker: shutdown")))))
+    channels))
+
+(defn parallel-worker
+  [workers body-fn]
+  (let [work (chan 100)]
     (dotimes [n workers]
       (thread
         (loop []
           (alt!!
-            (:in channels)
-            ([val]
-               (when val
-                 (try
-                   (body-fn n channels val)
-                   (catch Exception e
-                     (log/errorf e "worker[%d]: error" n)))
-                 (recur)))
-
-            (nth ctls n)
-            ([_]
-               (log/infof "worker[%d]: shutdown" n))))))
-    channels))
-
-;; TODO: how do we know when we are "done" with downloading a files segments?
-;; move completed file to complete dir
-;; mv .nzb file to complete dir?
+            work
+            ([{:keys [val replies]}]
+               (>!! replies
+                    (body-fn n val))
+               (recur))))))
+    (worker (fn [channels vals]
+              (let [replies (chan (count vals))]
+                (thread
+                  (doseq [val vals]
+                    (>!! work {:replies replies :val val})))
+                (>!! (:out channels)
+                     (<!! (async/into [] (async/take (count vals) replies)))))))))
 
 (defn start-cleaner
   [cfg app-state]
-  (worker (fn [n channels val]
-            (let [seg-file (:segment-file val)]
-              (log/info "cleaning up" (str seg-file))
-              (fs/delete seg-file)))))
+  (worker (fn [channels vals]
+            (doseq [val vals]
+              (let [seg-file (:segment-file val)]
+                (log/info "cleaning up" (str seg-file))
+                (fs/delete seg-file)))
+            (let [decoded  (:decoded-file (first vals))
+                  complete (fs/file (-> cfg :dirs :complete)
+                                    (fs/base-name decoded))]
+              (fs/rename decoded complete)))))
 
 (defn start-segment-combiner
   [cfg app-state]
-  (worker (fn [_ channels val]
-            (let [file (io/file (-> cfg :dirs :temp) (-> val :file :filename))]
-              (io/make-parents file)
-              (yenc/decode-to (:decoded-segment val) file)
-              (>!! (:out channels)
-                   (assoc val :decoded-file file))))))
+  (worker (fn [channels vals]
+            (>!! (:out channels)
+                 (mapv (fn [val]
+                         (let [file (io/file (-> cfg :dirs :temp) (-> val :file :filename))]
+                           (io/make-parents file)
+                           (yenc/decode-to (:decoded-segment val) file)
+                           (assoc val :decoded-file file)))
+                       vals)))))
 
 (defn start-decoder
   [cfg app-state]
-  (worker (fn [n channels val]
-            (logt (format "decoder[%d]: decoding file:"
-                          n (str (:segment-file val)))
-              (let [seg-file (:segment-file val)
-                    decoded  (yenc/decode-segment seg-file)]
-                (>!! (:out channels)
-                     (assoc val :decoded-segment decoded)))))
-          :workers 10))
+  (parallel-worker 10 (fn [n val]
+                        (logt (format "decoder: decoding file:" (str (:segment-file val)))
+                              (let [seg-file (:segment-file val)
+                                    decoded  (yenc/decode-segment seg-file)]
+                                (assoc val :decoded-segment decoded))))))
 
 (defn start-writer
   [cfg app-state]
-  (worker (fn [n channels val]
-            (let [dir  (-> cfg :dirs :temp)
-                  file (io/file dir (-> val :segment :message-id))]
-              (logt (format "writer[%d]: writing segment to %s" n (str file))
-                (io/copy (-> val :resp :bytes) file)
-                (>!! (:out channels)
-                     (assoc val :segment-file file)))))
-          :workers 10))
+  (parallel-worker 10
+                   (fn [n val]
+                     (let [dir  (-> cfg :dirs :temp)
+                           file (io/file dir (-> val :segment :message-id))]
+                       (logt (format "writer[%d]: writing segment to %s" n (str file))
+                             (io/copy (-> val :resp :bytes) file)
+                             (assoc val :segment-file file))))))
 
 (defn start-downloader
   [cfg app-state nntp]
-  (worker (fn [n channels val]
+  (worker (fn [channels val]
             (log/info "starting download of file" (:filename val))
-            (let [reply (nntp/download nntp val)]
-              (async/pipe reply (:out channels) false)))))
+            (let [replies  (nntp/download nntp val)
+                  segments (count (:segments val))]
+              (>!! (:out channels)
+                   (<!! (async/into [] (async/take segments replies))))))))
 
 (defn start-listener
   [cfg app-state]
-  (worker (fn [n channels path]
+  (worker (fn [channels path]
             (log/info "received nzb file:" path)
             (doseq [file (nzb/parse (io/file path))]
               (>!! (:out channels)
