@@ -13,127 +13,108 @@
   (:import [java.io RandomAccessFile]))
 
 (defn worker
-  [body-fn & {:keys [in out ctl]
-              :or   {in  (chan 100)
-                     out (chan 100)
+  [n4me body-fn & {:keys [in out ctl]
+              :or   {in  (chan)
+                     out (chan)
                      ctl (chan)}}]
   (let [channels {:in in :out out :ctl ctl}]
     (thread
       (loop []
+        (log/infof "worker[%s]: waiting for work" n4me)
         (alt!!
           in
           ([val]
-             (when val
-               (try
-                 (body-fn channels val)
-                 (catch Exception e
-                   (log/error e "worker: error")))
-               (recur)))
+             (if val
+               (do
+                 (try
+                   (body-fn channels val)
+                   (catch Exception e
+                     (log/errorf e "worker[%s]: error" n4me)))
+                 (recur))
+               (log/infof "worker[%s]: got nil value, exiting loop" n4me)))
 
           ctl
           ([_]
-             (log/infof "worker: shutdown")))))
+             (log/infof "worker[%s]: shutdown" n4me)))))
     channels))
-
-(defn parallel-worker
-  [workers body-fn]
-  (let [work (chan 100)]
-    (dotimes [n workers]
-      (thread
-        (loop []
-          (alt!!
-            work
-            ([{:keys [val replies]}]
-               (>!! replies
-                    (body-fn n val))
-               (recur))))))
-    (worker (fn [channels vals]
-              (let [replies (chan (count vals))]
-                (thread
-                  (doseq [val vals]
-                    (>!! work {:replies replies :val val})))
-                (>!! (:out channels)
-                     (<!! (async/into [] (async/take (count vals) replies)))))))))
 
 (defn start-cleaner
   [cfg app-state]
-  (worker (fn [channels vals]
-            (doseq [val vals]
-              (let [seg-file (:segment-file val)]
-                (log/info "cleaning up" (str seg-file))
-                (fs/delete seg-file)))
-            (let [decoded  (:decoded-file (first vals))
+  (worker "cleaner"
+          (fn [channels file]
+            (log/info "cleaner got file:" (:filename file))
+            (doseq [segment (-> file :segments vals)
+                    :let [f (:downloaded-file segment)]]
+              (when f
+                (log/info "cleaner deleting" (str f))
+                (fs/delete f)))
+            (let [combined (:combined-file file)
                   complete (fs/file (-> cfg :dirs :complete)
-                                    (fs/base-name decoded))]
-              (fs/rename decoded complete)))))
+                                    (fs/base-name combined))]
+              (log/info "cleaner moving" (str combined) "to" (str complete))
+              (fs/rename combined complete)))))
 
-(defn start-segment-combiner
+(defn start-combiner
   [cfg app-state]
-  (worker (fn [channels vals]
-            (>!! (:out channels)
-                 (mapv (fn [val]
-                         (let [file (io/file (-> cfg :dirs :temp) (-> val :file :filename))]
-                           (io/make-parents file)
-                           (yenc/decode-to (:decoded-segment val) file)
-                           (assoc val :decoded-file file)))
-                       vals)))))
+  (worker "combiner"
+          (fn [channels file]
+            (log/info "combiner got file:" (:filename file))
+            (let [combined-file (io/file (-> cfg :dirs :temp) (:filename file))]
+              (io/make-parents combined-file)
+              (yenc/write-to file combined-file)
+              (log/info "combiner putting on out chan")
+              (>!! (:out channels)
+                   (assoc file :combined-file combined-file))))))
 
 (defn start-decoder
-  [cfg app-state]
-  (parallel-worker 10 (fn [n val]
-                        (logt (format "decoder: decoding file:" (str (:segment-file val)))
-                              (let [seg-file (:segment-file val)
-                                    decoded  (yenc/decode-segment seg-file)]
-                                (assoc val :decoded-segment decoded))))))
+  [cfg app-state yenc-decoder]
+  (worker "decoder"
+          (fn [channels file]
+            (log/info "decoder got file:" (:filename file))
+            (let [result-ch (yenc/decode-file yenc-decoder file)]
+              (log/info "decoder putting on out chan")
+              (>!! (:out channels)
+                   (<!! result-ch))))))
 
-(defn start-writer
-  [cfg app-state]
-  (parallel-worker 10
-                   (fn [n val]
-                     (let [dir  (-> cfg :dirs :temp)
-                           file (io/file dir (-> val :segment :message-id))]
-                       (logt (format "writer[%d]: writing segment to %s" n (str file))
-                             (io/copy (-> val :resp :bytes) file)
-                             (assoc val :segment-file file))))))
-
+;; TODO can have multiple downloaders so can have several concurrent segments from different files downloading?
 (defn start-downloader
   [cfg app-state nntp]
-  (worker (fn [channels val]
-            (log/info "starting download of file" (:filename val))
-            (let [replies  (nntp/download nntp val)
-                  segments (count (:segments val))]
+  (worker "downloader"
+          (fn [channels file]
+            (log/info "downloader got file:" (:filename file))
+            (let [result-ch (nntp/download nntp file)]
+              (log/info "downloader putting on out chan")
               (>!! (:out channels)
-                   (<!! (async/into [] (async/take segments replies))))))))
+                   (<!! result-ch))))))
 
 (defn start-listener
   [cfg app-state]
-  (worker (fn [channels path]
-            (log/info "received nzb file:" path)
+  (worker "listener"
+          (fn [channels path]
+            (log/info "listener got path:" path)
             (doseq [file (nzb/parse (io/file path))]
-              (>!! (:out channels)
-                   (assoc file :nzb-file file))))))
+              (log/infof "listener %s putting on out chan" (:filename file))
+              (>!! (:out channels) file)))))
 
 ;; component
 
-(defrecord Conductor [cfg app-state watcher nntp ctls]
+(defrecord Conductor [cfg app-state watcher nntp yenc-decoder ctls]
   component/Lifecycle
   (start [this]
     (if-not ctls
       (do
         (log/info "starting")
-        (let [listener   (start-listener cfg app-state)
-              downloader (start-downloader cfg app-state nntp)
-              writer     (start-writer cfg app-state)
-              decoder    (start-decoder cfg app-state)
-              combiner   (start-segment-combiner cfg app-state)
-              cleaner    (start-cleaner cfg app-state)
-              ctls       (mapv :ctl [listener downloader writer decoder])]
-          (async/pipe (:events watcher) (:in listener))
-          (async/pipe (:out listener) (:in downloader))
-          (async/pipe (:out downloader) (:in writer))
-          (async/pipe (:out writer) (:in decoder))
-          (async/pipe (:out decoder) (:in combiner))
-          (async/pipe (:out combiner) (:in cleaner))
+        (let [workers [{:out (:events watcher)}
+                       (start-listener cfg app-state)
+                       (start-downloader cfg app-state nntp)
+                       (start-decoder cfg app-state yenc-decoder)
+                       (start-combiner cfg app-state)
+                       (start-cleaner cfg app-state)]
+              ctls    (mapv :ctl workers)]
+          (doseq [[w1 w2] (partition 2 1 workers)
+                  :let [from (:out w1)
+                        to   (:in w2)]]
+            (async/pipe from to))
           (assoc this :ctls ctls)))
       this))
 
@@ -149,33 +130,3 @@
 (defn new-conductor
   [cfg]
   (map->Conductor {:cfg cfg}))
-
-;; public
-
-;; 1 file -> 12 segments
-;; 10 nntp workers downloading putting results onto same channel for file
-;; pass reply channel onto writer
-;; writer takes all values off chann
-
-
-
-
-
-;; listen for fs events
-;; get an event, parse it into nzb map thing
-;; start each file downloading?
-;;   - put in appstate the current files
-;;   - when nntp pull off work queue will update state to say "downloading"
-;;   - nntp needs to update appstate with no. bytes downloaded as it goes
-
-;; have n workers for writing segments to file
-;; have n workers for decoding yenc encoded segment files into single file
-;;   - only 1 worker per file though, how to prevent multiple threads writing to same randomaccessfile?
-;; create pipeline of channels to take results from reply channel of download and push to decode and writing
-
-;; status of file and segments need to be kept in sync
-;; if interupted, app state will be saved
-;;   - need to be able to resume current state of downloads from appstate, should be possible
-
-;; ws component that adds watch to app-state and dumps down over websocket
-;; om? lol ui that updates based on state changes to atom getting syncd by websocket

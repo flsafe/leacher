@@ -2,6 +2,9 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
             [clojure.set :as set]
+            [clojure.tools.logging :as log]
+            [clojure.core.async :as async :refer [thread <!! >!! alt!! chan put!]]
+            [com.stuartsierra.component :as component]
             [me.raynes.fs :as fs]
             [leacher.utils :refer [parse-long]])
   (:import [java.io StringReader BufferedReader BufferedWriter RandomAccessFile]))
@@ -88,16 +91,93 @@
                   :bytes    (.toByteArray w)}
               \p (recur :reading (assoc keywords :part values)))))))))
 
-(defn decode-to
-  [decoded file]
-  (let [output  (RandomAccessFile. ^java.io.File file "rw")
-        begin   (-> decoded :keywords :part :begin dec)
-        end     (-> decoded :keywords :part :end dec)]
-    (.seek output begin)
-    (.write output ^bytes (:bytes decoded))))
+(defn write-to
+  [{:keys [segments filename]} file]
+  (let [output (RandomAccessFile. ^java.io.File file "rw")]
+    (doseq [segment (vals segments)
+            :let [decoded (:decoded segment)]
+            :when decoded]
+      (let [begin (-> decoded :keywords :part :begin dec)
+            end   (-> decoded :keywords :part :end dec)]
+        (.seek output begin)
+        (.write output ^bytes (:bytes decoded))))))
 
 (defn valid-segment?
   [{:keys [keywords bytes] :as segment}]
   (let [begin (:begin keywords)
         end   (:end keywords)]
     (= (:size begin) (:size end) (count bytes))))
+
+;; component
+
+(defn start-workers
+  [workers work-ch ctl]
+  (let [ctls (mapv chan (range workers))]
+    (thread
+      (<!! ctl)
+      (dotimes [n workers]
+        (async/close! (nth ctls n))))
+    (dotimes [n workers]
+      (thread
+        (loop []
+          (alt!!
+            work-ch
+            ([{:keys [segment reply] :as work}]
+               (log/infof "worker[%d]: got segment %s" n (:message-id segment))
+               (try
+                 (if-let [segment-file (:downloaded-file segment)]
+                   (let [decoded (decode-segment segment-file)]
+                     (log/infof "worker[%d]: putting decoded on reply chan" n)
+                     (>!! reply (-> work
+                                    (dissoc :reply)
+                                    (assoc-in [:segment :decoded] decoded))))
+                   (do
+                     (log/warnf "worker[%d]: missing :downloaded-file, skipping decoding" n)
+                     (>!! reply (dissoc work :reply))))
+                 (catch Exception e
+                   (log/errorf e "worker[%d]: failed decoding" n)
+                   ;; TODO: handle error in some way
+                   (>!! reply (dissoc work :reply))))
+               (recur))
+
+            (nth ctls n)
+            ([_]
+               (log/infof "worker[%d]: exiting" n))))))))
+
+
+(defrecord YencDecoder [cfg work-ch ctl]
+  component/Lifecycle
+  (start [this]
+    (if-not work-ch
+      (let [work-ch (chan 100)
+            ctl     (chan)]
+        ;; TODO configure number
+        (start-workers 10 work-ch ctl)
+        (assoc this :work-ch work-ch :ctl ctl))
+      this))
+
+  (stop [this]
+    (if work-ch
+      (do
+        (async/close! ctl)
+        (async/close! work-ch)
+        (assoc this :work-ch nil :ctl ctl))
+      this)))
+
+(defn new-decoder
+  [cfg]
+  (map->YencDecoder {:cfg cfg}))
+
+;; public
+
+(defn decode-file
+  [yenc-decoder file]
+  (let [segments (:segments file)
+        replies  (chan (count segments))]
+    (doseq [segment (vals segments)]
+      (put! (:work-ch yenc-decoder)
+            {:reply   replies
+             :segment segment}))
+    (async/reduce (fn [res {:keys [segment]}]
+                    (assoc-in res [:segments (:message-id segment)] segment))
+                  file (async/take (count segments) replies))))

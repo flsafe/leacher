@@ -48,7 +48,7 @@
         resp          {:code code
                        :body body}]
     (if (>= code 400)
-      (ex-info "error response" resp)
+      (throw (ex-info "error response" resp))
       resp)))
 
 (defn header-response
@@ -101,7 +101,6 @@
 
 (defn group
   [conn name-of]
-  (log/info "switching group to" name-of)
   (write conn (str "GROUP " name-of))
   (let [resp              (response conn)
         [number low high] (string/split (:body resp) #" ")]
@@ -113,7 +112,6 @@
 
 (defn article
   [conn message-id]
-  (log/info "downloading article" message-id)
   (write conn (str "ARTICLE " message-id))
   (let [resp    (response conn)
         headers (header-response conn)
@@ -142,19 +140,31 @@
       (with-open [socket ^Socket (:socket conn)]
         (when (authenticated? conn cfg)
           (loop []
+            (log/infof "worker[%d]: waiting for work" n)
             (alt!!
               work-chan
               ([work]
                  (if work
                    (do
                      (try
+                       (log/infof "worker[%d]: switching group to %s" n (-> work :file :groups first))
                        (group conn (-> work :file :groups first))
-                       (let [resp (article conn (-> work :segment :message-id))]
+
+                       (log/infof "worker[%d]: downloading article %s" n (-> work :segment :message-id))
+                       (let [message-id (-> work :segment :message-id)
+                             resp       (article conn message-id)
+                             file       (fs/file (-> cfg :dirs :temp) message-id)]
+                         (log/infof "worker[%d]: saving to %s" n (str file))
+                         (io/copy (:bytes resp) file)
+
+                         (log/infof "worker[%d]: replying" n)
                          (>!! (:reply work) (-> work
                                                 (dissoc :reply)
-                                                (assoc :resp resp))))
+                                                (assoc-in [:segment :downloaded-file] file))))
                        (catch Exception e
-                         (log/errorf e "worker[%d] failed to download segment" n)))
+                         (log/errorf e "worker[%d] failed to download segment" n)
+                         ;; TODO do something useful with error
+                         (>!! (:reply work) (dissoc work :reply))))
                      (recur))
                    (log/infof "worker[%d] exiting" n)))
 
@@ -200,10 +210,11 @@
   [nntp file]
   (let [replies  (chan)
         segments (:segments file)]
-    (doseq [segment segments]
+    (doseq [segment (vals segments)]
       (put! (:work-chan nntp)
             {:reply      replies
              :file       file
-             :segment    segment
-             :started-at (java.util.Date.)}))
-    replies))
+             :segment    segment}))
+    (async/reduce (fn [res {:keys [segment]}]
+                    (assoc-in res [:segments (:message-id segment)] segment))
+                  file (async/take (count segments) replies))))

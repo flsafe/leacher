@@ -48,8 +48,10 @@
         encoding    (encoding-from subject)
         groups      (vec (zip-xml/xml-> file :groups :group zip-xml/text))
         segments    (->> (zip-xml/xml-> file :segments :segment)
-                         (map segment->map))
-        total-bytes (reduce + (map :bytes segments))]
+                         (map segment->map)
+                         (map (juxt :message-id identity))
+                         (into {}))
+        total-bytes (reduce + (map :bytes (vals segments)))]
     {:poster         poster
      :date           date
      :subject        subject
@@ -69,6 +71,6 @@
       (->> (mapv ->file))))
 
 (comment
-  (parse "hof.nzb")
+  (count (parse "/home/gareth/.leacher/queue/slayer.nzb"))
 
   )

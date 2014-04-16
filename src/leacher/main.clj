@@ -8,6 +8,7 @@
             [com.stuartsierra.component :as component]
             [leacher.config :as config]
             [leacher.nntp :as nntp]
+            [leacher.decoders.yenc :as yenc]
             [leacher.state :as state]
             [leacher.watcher :as watcher]
             [leacher.conductor :as conductor])
@@ -29,6 +30,7 @@
 (def components
   [:app-state
    :nntp
+   :yenc-decoder
    :watcher
    :conductor])
 
@@ -44,13 +46,14 @@
 (defn new-leacher-system
   [cfg]
   (map->LeacherSystem
-   {:cfg       cfg
-    :app-state (state/new-app-state (:app-state cfg))
-    :watcher   (watcher/new-watcher (-> cfg :dirs :queue))
-    :nntp      (component/using (nntp/new-nntp (:nntp cfg))
-                                [:app-state])
-    :conductor (component/using (conductor/new-conductor cfg)
-                                [:app-state :watcher :nntp])}))
+   {:cfg          cfg
+    :app-state    (state/new-app-state (:app-state cfg))
+    :watcher      (watcher/new-watcher (-> cfg :dirs :queue))
+    :nntp         (component/using (nntp/new-nntp (:nntp cfg))
+                                   [:app-state])
+    :yenc-decoder (yenc/new-decoder {})
+    :conductor    (component/using (conductor/new-conductor cfg)
+                                   [:app-state :watcher :nntp :yenc-decoder])}))
 
 ;; entry point
 
