@@ -11,7 +11,9 @@
             [leacher.decoders.yenc :as yenc]
             [leacher.state :as state]
             [leacher.watcher :as watcher]
-            [leacher.conductor :as conductor])
+            [leacher.conductor :as conductor]
+            [leacher.ui.http :as http]
+            [leacher.ui.ws :as ws])
   (:gen-class))
 
 ;; shutdown hooks
@@ -32,7 +34,9 @@
    :nntp
    :yenc-decoder
    :watcher
-   :conductor])
+   :conductor
+   :http
+   :ws])
 
 (defrecord LeacherSystem [cfg]
   component/Lifecycle
@@ -53,7 +57,11 @@
                                    [:app-state])
     :yenc-decoder (yenc/new-decoder {})
     :conductor    (component/using (conductor/new-conductor cfg)
-                                   [:app-state :watcher :nntp :yenc-decoder])}))
+                                   [:app-state :watcher :nntp :yenc-decoder])
+    :http         (component/using (http/new-http-server (:http-server cfg))
+                                   [:app-state])
+    :ws           (component/using (ws/new-ws-api (:ws-server cfg))
+                                   [:app-state])}))
 
 ;; entry point
 
@@ -95,12 +103,3 @@
         (log/info "interrupted! shutting down")
         (component/stop system))
       (.join (Thread/currentThread)))))
-
-;; nzb file added to queue dir
-;; parse nzb
-;; add each file in nzb to nntp work channel
-;;   return channel for results
-;;   n concurrent connections work away to download putting results on reply channel
-;; pipe results from return channel
-;; n workers waiting for decoding work
-;; single worker to combine decoded

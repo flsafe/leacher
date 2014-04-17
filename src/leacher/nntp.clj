@@ -132,6 +132,33 @@
       (log/error e "failed to authenticate with nntp server" (ex-data e))
       false)))
 
+(defn download-to-file
+  [cfg app-state conn n {:keys [file segment]}]
+  (let [filename   (:filename file)
+        message-id (:message-id segment)]
+    (try
+      (state/set-state! app-state assoc-in [:nntp :workers n]
+                        {:status     :downloading
+                         :message-id message-id
+                         :filename   filename})
+      (state/set-state! app-state assoc-in [:downloads filename :segments message-id :status] :downloading)
+
+      (log/infof "worker[%d]: switching group to %s" n (-> file :groups first))
+      (group conn (-> file :groups first))
+
+      (log/infof "worker[%d]: downloading article %s" n message-id)
+      (let [resp   (article conn message-id)
+            result (fs/file (-> cfg :dirs :temp) message-id)]
+        (log/infof "worker[%d]: saving to %s" n (str result))
+        (io/copy (:bytes resp) result)
+
+        (state/set-state! app-state assoc-in
+                          [:downloads filename :segments message-id :status]
+                          :completed)
+        result)
+      (catch Exception e
+        (log/errorf e "failed downloading %s" message-id)))))
+
 (defn start-worker
   [cfg work-chan ctl app-state n]
   (log/info "starting worker" n)
@@ -141,37 +168,27 @@
         (when (authenticated? conn cfg)
           (loop []
             (log/infof "worker[%d]: waiting for work" n)
+            (state/set-state! app-state assoc-in
+                              [:nntp :workers n]
+                              {:status :waiting})
             (alt!!
               work-chan
               ([work]
                  (if work
                    (do
-                     (try
-                       (log/infof "worker[%d]: switching group to %s" n (-> work :file :groups first))
-                       (group conn (-> work :file :groups first))
-
-                       (log/infof "worker[%d]: downloading article %s" n (-> work :segment :message-id))
-                       (let [message-id (-> work :segment :message-id)
-                             resp       (article conn message-id)
-                             file       (fs/file (-> cfg :dirs :temp) message-id)]
-                         (log/infof "worker[%d]: saving to %s" n (str file))
-                         (io/copy (:bytes resp) file)
-
-                         (log/infof "worker[%d]: replying" n)
-                         (>!! (:reply work) (-> work
-                                                (dissoc :reply)
-                                                (assoc-in [:segment :downloaded-file] file))))
-                       (catch Exception e
-                         (log/errorf e "worker[%d] failed to download segment" n)
-                         ;; TODO do something useful with error
-                         (>!! (:reply work) (dissoc work :reply))))
+                     (let [file (download-to-file cfg app-state conn n work)]
+                       (log/infof "worker[%d]: replying" n)
+                       (>!! (:reply work)
+                            (-> work
+                                (dissoc :reply)
+                                (assoc-in [:segment :downloaded-file] file))))
                      (recur))
                    (log/infof "worker[%d] exiting" n)))
 
               ctl
               ([_]
-                 (log/infof "worker[%d] got interupt" n))))))
-      (log/infof "worker[%d] socket closing" n))))
+                 (log/infof "worker[%d] got interupt" n)))))))
+      (log/infof "worker[%d] socket closing" n)))
 
 (defn start-workers
   [cfg work-chan ctls app-state]
@@ -207,7 +224,7 @@
 ;; public
 
 (defn download
-  [nntp file]
+  [nntp {:keys [filename] :as file}]
   (let [replies  (chan)
         segments (:segments file)]
     (doseq [segment (vals segments)]
@@ -216,5 +233,6 @@
              :file       file
              :segment    segment}))
     (async/reduce (fn [res {:keys [segment]}]
-                    (assoc-in res [:segments (:message-id segment)] segment))
+                    (let [{:keys [message-id]} segment]
+                      (assoc-in res [:segments message-id] segment)))
                   file (async/take (count segments) replies))))

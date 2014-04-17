@@ -41,8 +41,8 @@
 (defn start-cleaner
   [cfg app-state]
   (worker "cleaner"
-          (fn [channels file]
-            (log/info "cleaner got file:" (:filename file))
+          (fn [channels {:keys [filename] :as file}]
+            (log/info "cleaner got file:" filename)
             (doseq [segment (-> file :segments vals)
                     :let [f (:downloaded-file segment)]]
               (when f
@@ -52,7 +52,8 @@
                   complete (fs/file (-> cfg :dirs :complete)
                                     (fs/base-name combined))]
               (log/info "cleaner moving" (str combined) "to" (str complete))
-              (fs/rename combined complete)))))
+              (fs/rename combined complete))
+            (state/set-state! app-state update-in [:downloads filename :status] :completed))))
 
 (defn start-combiner
   [cfg app-state]
@@ -80,9 +81,13 @@
 (defn start-downloader
   [cfg app-state nntp]
   (worker "downloader"
-          (fn [channels file]
-            (log/info "downloader got file:" (:filename file))
+          (fn [channels {:keys [filename] :as file}]
+            (log/info "downloader got file:" filename)
+            (state/set-state! app-state assoc-in [:downloads filename]
+                              (assoc file :status :starting))
             (let [result-ch (nntp/download nntp file)]
+              (state/set-state! app-state assoc-in [:downloads filename]
+                              (assoc file :status :downloading))
               (log/info "downloader putting on out chan")
               (>!! (:out channels)
                    (<!! result-ch))))))
@@ -110,7 +115,7 @@
                        (start-decoder cfg app-state yenc-decoder)
                        (start-combiner cfg app-state)
                        (start-cleaner cfg app-state)]
-              ctls    (mapv :ctl workers)]
+              ctls    (mapv :ctl (rest workers))]
           (doseq [[w1 w2] (partition 2 1 workers)
                   :let [from (:out w1)
                         to   (:in w2)]]

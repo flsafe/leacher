@@ -123,22 +123,23 @@
           (alt!!
             work-ch
             ([{:keys [segment reply] :as work}]
-               (log/infof "worker[%d]: got segment %s" n (:message-id segment))
-               (try
-                 (if-let [segment-file (:downloaded-file segment)]
-                   (let [decoded (decode-segment segment-file)]
-                     (log/infof "worker[%d]: putting decoded on reply chan" n)
-                     (>!! reply (-> work
-                                    (dissoc :reply)
-                                    (assoc-in [:segment :decoded] decoded))))
-                   (do
-                     (log/warnf "worker[%d]: missing :downloaded-file, skipping decoding" n)
+               (when work
+                 (log/infof "worker[%d]: got segment %s" n (:message-id segment))
+                 (try
+                   (if-let [segment-file (:downloaded-file segment)]
+                     (let [decoded (decode-segment segment-file)]
+                       (log/infof "worker[%d]: putting decoded on reply chan" n)
+                       (>!! reply (-> work
+                                      (dissoc :reply)
+                                      (assoc-in [:segment :decoded] decoded))))
+                     (do
+                       (log/warnf "worker[%d]: missing :downloaded-file, skipping decoding" n)
+                       (>!! reply (dissoc work :reply))))
+                   (catch Exception e
+                     (log/errorf e "worker[%d]: failed decoding" n)
+                     ;; TODO: handle error in some way
                      (>!! reply (dissoc work :reply))))
-                 (catch Exception e
-                   (log/errorf e "worker[%d]: failed decoding" n)
-                   ;; TODO: handle error in some way
-                   (>!! reply (dissoc work :reply))))
-               (recur))
+                 (recur)))
 
             (nth ctls n)
             ([_]
