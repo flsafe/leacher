@@ -31,7 +31,8 @@
     (.open ws "ws://localhost:8091/ws")
     c))
 
-(def app-state (atom {:downloads {}}))
+(def app-state (atom {:downloads {}
+                      :workers   {}}))
 
 (defmulti handle-event :type)
 
@@ -41,10 +42,33 @@
 
 (defmethod handle-event :message
   [{:keys [data]}]
-  (println "got data" data))
+  (println data)
+  (swap! app-state merge (:data data)))
+
+(defn download-item
+  [download owner]
+  (dom/li nil
+    (:filename download)))
+
+(defmulti worker-item (fn [[_ w] _] (:status w)))
+
+(defmethod worker-item :waiting
+  [[_ w] owner]
+  (dom/li nil
+    "Waiting..."))
+
+(defmethod worker-item :downloading
+  [[_ w] owner]
+  (dom/li nil
+    "Downloading " (:filename w) "/" (:message-id w)))
+
+(defmethod worker-item :error
+  [[_ w] owner]
+  (dom/li #js {:className "error"}
+    "Error: " (:message w)))
 
 (defn leacher-app
-  [{:keys [downloads] :as app} owner]
+  [{:keys [downloads workers] :as app} owner]
   (reify
     om/IWillMount
     (will-mount [this]
@@ -57,7 +81,13 @@
     om/IRender
     (render [this]
       (dom/div nil
-        (dom/h1 nil "Downloads")))))
+        (dom/h1 nil "Leacher")
+        (dom/h2 nil "Workers"
+          (apply dom/ul #js {:id "workers"}
+            (om/build-all worker-item workers)))
+        (dom/h2 nil "Downloads")
+        (apply dom/ul #js {:id "downloads"}
+          (om/build-all download-item downloads))))))
 
 (om/root leacher-app app-state
   {:target (.getElementById js/document "app")})

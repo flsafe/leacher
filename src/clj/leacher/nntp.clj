@@ -156,6 +156,9 @@
         (state/set-state! app-state assoc-in
           [:downloads filename :segments message-id :status]
           :completed)
+        (state/set-state! app-state update-in
+          [:downloads filename :bytes-received] (fnil + 0) (count (:bytes resp)))
+
         result)
       (catch Exception e
         (state/set-state! app-state assoc-in
@@ -170,7 +173,7 @@
   (thread
     (let [conn (connect cfg)]
       (with-open [socket ^Socket (:socket conn)]
-        (when (authenticated? conn cfg)
+        (if (authenticated? conn cfg)
           (loop []
             (log/infof "worker[%d]: waiting for work" n)
             (state/set-state! app-state assoc-in
@@ -191,7 +194,10 @@
 
               ctl
               ([_]
-                 (log/infof "worker[%d] got interupt" n)))))))
+                 (log/infof "worker[%d] got interupt" n))))
+          (state/set-state! app-state assoc-in
+            [:workers n]
+            {:status :error :message "Failed to authenticate"}))))
       (log/infof "worker[%d] socket closing" n)))
 
 (defn start-workers

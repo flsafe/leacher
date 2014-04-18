@@ -53,7 +53,8 @@
                                     (fs/base-name combined))]
               (log/info "cleaner moving" (str combined) "to" (str complete))
               (fs/rename combined complete))
-            (state/set-state! app-state update-in [:downloads filename :status] :completed))))
+            (state/set-state! app-state update-in
+              [:downloads filename :status] :completed))))
 
 (defn start-combiner
   [cfg app-state]
@@ -95,7 +96,8 @@
   (worker "listener"
           (fn [channels path]
             (log/info "listener got path:" path)
-            (let [files (reduce-kv #(assoc %1 %2 (assoc %3 :status :waiting))
+            (let [files (reduce-kv #(assoc %1 %2 (assoc %3 :status :waiting
+                                                        :bytes-received 0))
                           (nzb/parse (io/file path)))]
               (state/set-state! app-state update-in [:downloads] merge files))
             (doseq [[filename file] (nzb/parse (io/file path))]
