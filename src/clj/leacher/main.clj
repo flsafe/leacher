@@ -58,8 +58,7 @@
     :yenc-decoder (yenc/new-decoder {})
     :conductor    (component/using (conductor/new-conductor cfg)
                                    [:app-state :watcher :nntp :yenc-decoder])
-    :http         (component/using (http/new-http-server (:http-server cfg))
-                                   [:app-state])
+    :http         (http/new-http-server (:http-server cfg))
     :ws           (component/using (ws/new-ws-api (:ws-server cfg))
                                    [:app-state])}))
 

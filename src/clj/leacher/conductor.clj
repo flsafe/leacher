@@ -83,11 +83,9 @@
   (worker "downloader"
           (fn [channels {:keys [filename] :as file}]
             (log/info "downloader got file:" filename)
-            (state/set-state! app-state assoc-in [:downloads filename]
-                              (assoc file :status :starting))
+            (state/set-state! app-state assoc-in [:downloads filename :status] :starting)
             (let [result-ch (nntp/download nntp file)]
-              (state/set-state! app-state assoc-in [:downloads filename]
-                              (assoc file :status :downloading))
+              (state/set-state! app-state assoc-in [:downloads filename :status] :downloading)
               (log/info "downloader putting on out chan")
               (>!! (:out channels)
                    (<!! result-ch))))))
@@ -97,8 +95,11 @@
   (worker "listener"
           (fn [channels path]
             (log/info "listener got path:" path)
-            (doseq [file (nzb/parse (io/file path))]
-              (log/infof "listener %s putting on out chan" (:filename file))
+            (let [files (reduce-kv #(assoc %1 %2 (assoc %3 :status :waiting))
+                          (nzb/parse (io/file path)))]
+              (state/set-state! app-state update-in [:downloads] merge files))
+            (doseq [[filename file] (nzb/parse (io/file path))]
+              (log/infof "listener %s putting on out chan" filename)
               (>!! (:out channels) file)))))
 
 ;; component

@@ -26,10 +26,29 @@
                  [http-kit "2.1.16"]
                  [compojure "1.1.6"]
                  [fogus/ring-edn "0.2.0"]
+                 [hiccup "1.0.5"]
+
+                 ;; cljs stuff
+                 [org.clojure/clojurescript "0.0-2202"]
+                 [om "0.5.3"]
+                 [secretary "1.1.0"]
 
                  ;; omg logging
                  [log4j "1.2.17"]]
+
+  :plugins [[lein-cljsbuild "1.0.3"]]
+
+  :source-paths ["src/clj" "src/cljs"]
+
   :main leacher.main
-  :profiles {:dev {:source-paths ["dev"]
-                   :global-vars {*warn-on-reflection* true}}
-             :uberjar {:aot [leacher.main]}})
+
+  :profiles {:dev     {:source-paths ["dev"]
+                       :global-vars {*warn-on-reflection* true}}
+             :prod    {:hooks [leiningen.cljsbuild]}
+             :uberjar {:aot [leacher.main]}}
+
+  :cljsbuild {:builds [{:id           "dev"
+                        :source-paths ["src/clj" "src/cljs"]
+                        :compiler     {:output-to     "resources/public/js/app.js"
+                                       :output-dir    "resources/public/out-dev"
+                                       :optimizations :whitespace}}]})

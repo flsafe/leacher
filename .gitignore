@@ -9,3 +9,5 @@ pom.xml.asc
 /.nrepl-port
 hof.nzb
 dev/scratch.clj
+resources/public/out-dev/
+resources/public/js/app.js

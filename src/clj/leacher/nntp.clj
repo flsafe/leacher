@@ -137,11 +137,12 @@
   (let [filename   (:filename file)
         message-id (:message-id segment)]
     (try
-      (state/set-state! app-state assoc-in [:nntp :workers n]
-                        {:status     :downloading
-                         :message-id message-id
-                         :filename   filename})
-      (state/set-state! app-state assoc-in [:downloads filename :segments message-id :status] :downloading)
+      (state/set-state! app-state assoc-in
+        [:workers n] {:status     :downloading
+                      :message-id message-id
+                      :filename   filename})
+      (state/set-state! app-state assoc-in
+        [:downloads filename :segments message-id :status] :downloading)
 
       (log/infof "worker[%d]: switching group to %s" n (-> file :groups first))
       (group conn (-> file :groups first))
@@ -153,10 +154,14 @@
         (io/copy (:bytes resp) result)
 
         (state/set-state! app-state assoc-in
-                          [:downloads filename :segments message-id :status]
-                          :completed)
+          [:downloads filename :segments message-id :status]
+          :completed)
         result)
       (catch Exception e
+        (state/set-state! app-state assoc-in
+          [:downloads filename :segments message-id]
+          {:status :failed
+           :error  (.getMessage e)})
         (log/errorf e "failed downloading %s" message-id)))))
 
 (defn start-worker
@@ -169,8 +174,7 @@
           (loop []
             (log/infof "worker[%d]: waiting for work" n)
             (state/set-state! app-state assoc-in
-                              [:nntp :workers n]
-                              {:status :waiting})
+              [:workers n] {:status :waiting})
             (alt!!
               work-chan
               ([work]

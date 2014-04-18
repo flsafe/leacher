@@ -68,9 +68,11 @@
       (xml/parse startparse-sax)
       zip/xml-zip
       (zip-xml/xml-> :file)
-      (->> (mapv ->file))))
+      (->> (mapv ->file)
+        (mapv (juxt :filename identity))
+        (into {}))))
 
 (comment
-  (count (parse "/home/gareth/.leacher/queue/slayer.nzb"))
+  (first (parse "/home/gareth/.leacher/slayer.nzb"))
 
   )

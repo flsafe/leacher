@@ -6,6 +6,19 @@
             [clojure.java.io :as io])
   (:import [java.io PushbackReader]))
 
+(comment
+
+  {:downloads {"a.zip"        {:status :waiting
+                               :segments {"" {}}}
+               "somefile.mp3" {:status :downloading
+                               :segments {"<23b@asdf.com>" {}}}}
+   :workers   [{:status :waiting}
+               {:status     :downloading
+                :file       "somefile.mp3"
+                :message-id "<23b@asdf.com>"}]}
+
+  )
+
 (defn read-state
   [cfg]
   (try
