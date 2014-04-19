@@ -12,6 +12,8 @@
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
           (log/debug "got file:" filename)
+          (state/update-file! app-state filename assoc
+            :status :cleaning)
           (doseq [segment (-> file :segments vals)
                   :let [f (:downloaded-file segment)]]
             (when f

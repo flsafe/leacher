@@ -6,7 +6,8 @@
             [clojure.core.async :as async :refer [thread <!! >!! alt!! chan put!]]
             [com.stuartsierra.component :as component]
             [me.raynes.fs :as fs]
-            [leacher.utils :refer [parse-long]])
+            [leacher.utils :refer [parse-long]]
+            [leacher.state :as state])
   (:import [java.io StringReader BufferedReader BufferedWriter RandomAccessFile]))
 
 (def ENCODING "ISO-8859-1")
@@ -111,7 +112,7 @@
 ;; component
 
 (defn start-workers
-  [{:keys [decoders]} {:keys [work]}]
+  [{:keys [decoders]} {:keys [work]} app-state]
   (dotimes [n decoders]
     (thread
       (loop []
@@ -157,13 +158,14 @@
     combined-file))
 
 (defn start-listening
-  [cfg {:keys [in work out]}]
+  [cfg {:keys [in work out]} app-state]
   (thread
     (loop []
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
           (try
             (log/debug "got file" filename)
+            (state/update-file! app-state filename assoc :status :decoding)
             (let [file          (<!! (decode-file file work))
                   combined-file (combine-file cfg file)]
               (log/debug "putting" filename "on out")
@@ -175,7 +177,7 @@
           (recur))
         (log/debug "exiting")))))
 
-(defrecord YencDecoder [cfg channels]
+(defrecord YencDecoder [cfg channels app-state]
   component/Lifecycle
   (start [this]
     (if-not channels
@@ -183,8 +185,8 @@
                       :out  (chan)
                       :work (chan)}]
         (log/info "starting")
-        (start-workers cfg channels)
-        (start-listening cfg channels)
+        (start-workers cfg channels app-state)
+        (start-listening cfg channels app-state)
         (assoc this :channels channels))
       this))
 

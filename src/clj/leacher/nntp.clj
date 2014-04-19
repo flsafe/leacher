@@ -98,6 +98,12 @@
       (write conn (str "AUTHINFO PASS " password))
       (response conn))))
 
+(defn ping
+  [conn]
+  (log/debug "pinging")
+  (write conn "DATE")
+  (response conn))
+
 (defn group
   [conn name-of]
   (log/debug "changing group:" name-of)
@@ -134,7 +140,7 @@
       false)))
 
 (defn download-to-file
-  [cfg app-state conn n {:keys [file segment] :as nzb-file}]
+  [cfg app-state conn n {:keys [file segment] :as val}]
   (let [filename   (:filename file)
         message-id (:message-id segment)]
     (try
@@ -157,7 +163,7 @@
         (state/update-file! app-state filename update-in [:bytes-received]
           (fnil + 0) (count (:bytes resp)))
 
-        (-> nzb-file
+        (-> val
           (assoc-in [:segment :downloaded-file] result)
           (dissoc :reply)))
 
@@ -175,15 +181,22 @@
       (with-open [socket ^Socket (:socket conn)]
         (if (authenticated? conn (:nntp cfg))
           (loop []
-            (log/debugf "worker[%d]: waiting for work" n)
             (state/set-worker! app-state n :status :waiting)
+            (alt!!
+              work
+              ([{:keys [reply] :as val}]
+                 (when val
+                   (let [result (download-to-file cfg app-state conn n val)]
+                     (log/debugf "worker[%d]: replying" n)
+                     (>!! reply result)
+                     (recur))))
 
-            (if-let [{:keys [reply] :as val} (<!! work)]
-              (let [result (download-to-file cfg app-state conn n val)]
-                (log/debugf "worker[%d]: replying" n)
-                (>!! reply result)
-                (recur))
-              (log/debugf "worker[%d] exiting" n)))
+              (async/timeout (* 30 1000))
+              ([_]
+                 ;; keep connection to server alive
+                 (state/set-worker! app-state n :status :pinging)
+                 (ping conn)
+                 (recur))))
           (do
             (log/warnf "worker[%d]: failed to authenticate" n)
             (state/set-worker! app-state n
@@ -196,7 +209,7 @@
     (start-worker cfg app-state channels n)))
 
 (defn download
-  [{:keys [filename] :as file} work]
+  [file work]
   (let [replies  (chan)
         segments (:segments file)]
     (doseq [segment (vals segments)]
@@ -217,7 +230,8 @@
       (log/debug "waiting for work")
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
-          (state/update-file! app-state filename assoc :status :starting)
+          (state/set-file! app-state filename
+            (assoc file :status :starting))
           (let [result-ch (download file work)]
             (state/update-file! app-state filename assoc :status :downloading)
             (>!! out (<!! result-ch))

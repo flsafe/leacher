@@ -85,6 +85,10 @@
   [app-state n & {:as data}]
   (set-state! app-state assoc-in [:workers n] data))
 
+(defn set-file!
+  [app-state filename file]
+  (set-state! app-state assoc-in [:downloads filename] file))
+
 (defn update-file!
   [app-state filename f & args]
   (apply set-state! app-state update-in

@@ -1,7 +1,7 @@
 (ns leacher.ui.app
   (:require-macros [cljs.core.async.macros :refer [go]])
   (:require [goog.events :as events]
-            [cljs.core.async :refer [put! <! chan]]
+            [cljs.core.async :refer [put! <! chan close!]]
             [om.core :as om :include-macros true]
             [om.dom :as dom :include-macros true]
             [secretary.core :as secretary]
@@ -45,17 +45,31 @@
   (println data)
   (swap! app-state merge (:data data)))
 
+(defn ->bytes-display
+  [b]
+  (when b
+    (cond
+      (< b 1024)     (str b "b")
+      (< b 1048576)  (str (.toFixed (/ b 1024) 2) "kb")
+      (< b 1.074e+9) (str (.toFixed (/ b 1024 1024) 2) "mb")
+      (< b 1.1e+12)  (str (.toFixed (/ b 1024 1024 1024) 2) "gb")
+      :else ">1tb")))
+
 (defn download-item
-  [download owner]
+  [[filename file] owner]
   (dom/li nil
-    (:filename download)))
+    filename " "
+    (->bytes-display (get file :bytes-received 0)) " of "
+    (->bytes-display (:total-bytes file)) " in "
+    (:total-segments file) " segments: "
+    (name (:status file))))
 
 (defmulti worker-item (fn [[_ w] _] (:status w)))
 
-(defmethod worker-item :waiting
+(defmethod worker-item :default
   [[_ w] owner]
   (dom/li nil
-    "Waiting..."))
+    (-> w :status name)))
 
 (defmethod worker-item :downloading
   [[_ w] owner]
@@ -82,12 +96,12 @@
     (render [this]
       (dom/div nil
         (dom/h1 nil "Leacher")
-        (dom/h2 nil "Workers"
-          (apply dom/ul #js {:id "workers"}
-            (om/build-all worker-item workers)))
         (dom/h2 nil "Downloads")
         (apply dom/ul #js {:id "downloads"}
-          (om/build-all download-item downloads))))))
+          (om/build-all download-item downloads))
+        (dom/h2 nil "Workers")
+        (apply dom/ul #js {:id "workers"}
+          (om/build-all worker-item workers))))))
 
 (om/root leacher-app app-state
   {:target (.getElementById js/document "app")})
