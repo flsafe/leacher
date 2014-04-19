@@ -24,7 +24,7 @@
 
           ctl
           ([_]
-             (log/info "got shutdown signal")))))))
+             (log/debug "exiting")))))))
 
 ;; component
 
@@ -34,7 +34,7 @@
     (if-not channels
       (let [channels {:out (chan)
                       :ctl (chan)}]
-        (log/info "starting to watch" dir)
+        (log/info "starting with" dir)
         (start-watching dir channels)
         (assoc this :channels channels))
       this))

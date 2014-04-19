@@ -118,22 +118,23 @@
         (if-let [{:keys [segment reply] :as val} (<!! work)]
           (do
             (try
-              (log/infof "worker[%d]: got segment %s" n (:message-id segment))
+              (log/debugf "worker[%d]: got %s" n (:message-id segment))
               (if-let [segment-file (:downloaded-file segment)]
                 (let [decoded (decode-segment segment-file)]
-                  (log/infof "worker[%d]: putting decoded on reply chan" n)
+                  (log/debugf "worker[%d]: putting decoded %s on reply chan"
+                    n (:message-id segment))
                   (>!! reply (-> val
                                (dissoc :reply)
                                (assoc-in [:segment :decoded] decoded))))
                 (do
-                  (log/warnf "worker[%d]: missing :downloaded-file, skipping decoding" n)
+                  (log/warnf "worker[%d]: no downloaded-file, skipping" n)
                   (>!! reply (dissoc val :reply))))
               (catch Exception e
                 (log/errorf e "worker[%d]: failed decoding" n)
                 ;; TODO: handle error in some way
                 (>!! reply (dissoc val :reply))))
             (recur))
-          (log/infof "worker[%d]: exiting" n))))))
+          (log/debugf "worker[%d]: exiting" n))))))
 
 (defn decode-file
   [file work]
@@ -149,7 +150,7 @@
 
 (defn combine-file
   [cfg {:keys [filename] :as file}]
-  (log/info "combining decoded parts for" filename)
+  (log/debug "combining" filename)
   (let [combined-file (io/file (-> cfg :dirs :temp) filename)]
     (io/make-parents combined-file)
     (write-to file combined-file)
@@ -162,17 +163,17 @@
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
           (try
-            (log/info "got file to decode" filename)
+            (log/debug "got file" filename)
             (let [file          (<!! (decode-file file work))
                   combined-file (combine-file cfg file)]
-              (log/info "putting combined file on out chan")
+              (log/debug "putting" filename "on out")
               (>!! out
                 (assoc file :combined-file combined-file)))
             (catch Exception e
-              (log/error e "failed decoding file" filename)
+              (log/error e "failed decoding" filename)
               (>!! out file)))
           (recur))
-        (log/info "exiting listening loop")))))
+        (log/debug "exiting")))))
 
 (defrecord YencDecoder [cfg channels]
   component/Lifecycle

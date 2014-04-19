@@ -27,7 +27,7 @@
         conn   {:socket socket
                 :in     (io/reader socket :encoding ENCODING)
                 :out    (io/writer socket :encoding ENCODING)}]
-    (log/info "initial response" (response conn))
+    (log/debug "initial response" (response conn))
     conn))
 
 (defn write
@@ -49,7 +49,7 @@
                        :body body}]
     (if (>= code 400)
       (throw (ex-info "error response" resp))
-      resp)))
+      (log/spy resp))))
 
 (defn header-response
   [{^BufferedReader in :in}]
@@ -91,16 +91,16 @@
 
 (defn authenticate
   [conn user password]
-  (log/info "authenticating user")
+  (log/debug "authenticating")
   (write conn (str "AUTHINFO USER " user))
   (let [resp (response conn)]
     (when (<= 300 (:code resp) 399)
-      (log/info "authenticating password")
       (write conn (str "AUTHINFO PASS " password))
       (response conn))))
 
 (defn group
   [conn name-of]
+  (log/debug "changing group:" name-of)
   (write conn (str "GROUP " name-of))
   (let [resp              (response conn)
         [number low high] (string/split (:body resp) #" ")]
@@ -112,6 +112,7 @@
 
 (defn article
   [conn message-id]
+  (log/debug "getting article:" message-id)
   (write conn (str "ARTICLE " message-id))
   (let [resp    (response conn)
         headers (header-response conn)
@@ -126,14 +127,14 @@
 (defn authenticated?
   [conn {:keys [user password]}]
   (try
-    (log/info (authenticate conn user password))
+    (authenticate conn user password)
     true
     (catch Exception e
-      (log/error e "failed to authenticate with nntp server" (ex-data e))
+      (log/error e "failed to authenticate" (ex-data e))
       false)))
 
 (defn download-to-file
-  [cfg app-state conn n {:keys [file segment]}]
+  [cfg app-state conn n {:keys [file segment] :as nzb-file}]
   (let [filename   (:filename file)
         message-id (:message-id segment)]
     (try
@@ -144,13 +145,10 @@
       (state/set-state! app-state assoc-in
         [:downloads filename :segments message-id :status] :downloading)
 
-      (log/infof "worker[%d]: switching group to %s" n (-> file :groups first))
       (group conn (-> file :groups first))
-
-      (log/infof "worker[%d]: downloading article %s" n message-id)
       (let [resp   (article conn message-id)
             result (fs/file (-> cfg :dirs :temp) message-id)]
-        (log/infof "worker[%d]: saving to %s" n (str result))
+        (log/debugf "worker[%d]: copying bytes to %s" n (str result))
         (io/copy (:bytes resp) result)
 
         (state/set-state! app-state assoc-in
@@ -159,47 +157,45 @@
         (state/set-state! app-state update-in
           [:downloads filename :bytes-received] (fnil + 0) (count (:bytes resp)))
 
-        result)
+        (-> nzb-file
+          (assoc-in [:segment :downloaded-file] result)
+          (dissoc :reply)))
+
       (catch Exception e
         (state/set-state! app-state assoc-in
           [:downloads filename :segments message-id]
           {:status :failed
            :error  (.getMessage e)})
-        (log/errorf e "failed downloading %s" message-id)))))
+        (log/errorf e "worker[%d]: failed downloading %s" n message-id)))))
 
 (defn start-worker
   [cfg app-state {:keys [work]} n]
-  (log/info "starting worker" n)
+  (log/debugf "worker[%d]: starting" n)
   (thread
     (let [conn (connect (:nntp cfg))]
       (with-open [socket ^Socket (:socket conn)]
         (if (authenticated? conn (:nntp cfg))
           (loop []
-            (log/infof "worker[%d]: waiting for work" n)
-            (state/set-state! app-state assoc-in
-              [:workers n] {:status :waiting})
-            (alt!!
-              work
-              ([val]
-                 (if val
-                   (do
-                     (let [file (download-to-file cfg app-state conn n val)]
-                       (log/infof "worker[%d]: replying" n)
-                       (>!! (:reply val)
-                         (-> val
-                           (dissoc :reply)
-                           (assoc-in [:segment :downloaded-file] file))))
-                     (recur))
-                   (log/infof "worker[%d] exiting" n)))))
-          (state/set-state! app-state assoc-in
-            [:workers n]
-            {:status :error :message "Failed to authenticate"}))))
-    (log/infof "worker[%d] socket closing" n)))
+            (log/debugf "worker[%d]: waiting for work" n)
+            (state/set-state! app-state assoc-in [:workers n] {:status :waiting})
+
+            (if-let [{:keys [reply] :as val} (<!! work)]
+              (let [result (download-to-file cfg app-state conn n val)]
+                (log/debugf "worker[%d]: replying" n)
+                (>!! reply result)
+                (recur))
+              (log/debugf "worker[%d] exiting" n)))
+          (do
+            (log/warnf "worker[%d]: failed to authenticate" n)
+            (state/set-state! app-state assoc-in [:workers n]
+              {:status  :fatal
+               :message "Failed to authenticate"})))))
+    (log/debugf "worker[%d] socket closing" n)))
 
 (defn start-workers
   [cfg app-state channels]
-  (mapv #(start-worker cfg app-state channels %)
-    (range (-> cfg :nntp :max-connections))))
+  (dotimes [n (-> cfg :nntp :max-connections)]
+    (start-worker cfg app-state channels n)))
 
 (defn download
   [{:keys [filename] :as file} work]
@@ -220,19 +216,17 @@
   [app-state {:keys [in out work]}]
   (thread
     (loop []
-      (alt!!
-        in
-        ([{:keys [filename] :as file}]
-           (if file
-             (do
-               (state/set-state! app-state assoc-in
-                 [:downloads filename :status] :starting)
-               (let [result-ch (download file work)]
-                 (state/set-state! app-state assoc-in
-                   [:downloads filename :status] :downloading)
-                 (>!! out (<!! result-ch))
-                 (recur)))
-             (log/info "exiting loop")))))))
+      (log/debug "waiting for work")
+      (if-let [{:keys [filename] :as file} (<!! in)]
+        (do
+          (state/set-state! app-state assoc-in
+            [:downloads filename :status] :starting)
+          (let [result-ch (download file work)]
+            (state/set-state! app-state assoc-in
+              [:downloads filename :status] :downloading)
+            (>!! out (<!! result-ch))
+            (recur)))
+        (log/debug "exiting")))))
 
 (defrecord Nntp [cfg app-state channels]
   component/Lifecycle
