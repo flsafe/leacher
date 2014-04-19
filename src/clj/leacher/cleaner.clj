@@ -23,8 +23,8 @@
             (log/debug "moving" (str combined) "to" (str complete))
             (fs/rename combined complete))
 
-          (state/set-state! app-state update-in
-            [:downloads filename :status] :completed))
+          (state/update-file! app-state filename assoc
+            :status :completed))
 
         (log/debug "exiting")))))
 

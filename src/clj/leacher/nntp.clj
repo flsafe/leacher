@@ -138,12 +138,12 @@
   (let [filename   (:filename file)
         message-id (:message-id segment)]
     (try
-      (state/set-state! app-state assoc-in
-        [:workers n] {:status     :downloading
-                      :message-id message-id
-                      :filename   filename})
-      (state/set-state! app-state assoc-in
-        [:downloads filename :segments message-id :status] :downloading)
+      (state/set-worker! app-state n
+        :status :downloading
+        :message-id message-id
+        :filename   filename)
+      (state/update-segment! app-state filename message-id assoc
+        :status :downloading)
 
       (group conn (-> file :groups first))
       (let [resp   (article conn message-id)
@@ -151,21 +151,20 @@
         (log/debugf "worker[%d]: copying bytes to %s" n (str result))
         (io/copy (:bytes resp) result)
 
-        (state/set-state! app-state assoc-in
-          [:downloads filename :segments message-id :status]
-          :completed)
-        (state/set-state! app-state update-in
-          [:downloads filename :bytes-received] (fnil + 0) (count (:bytes resp)))
+        (state/update-segment! app-state filename message-id assoc
+          :status :completed)
+
+        (state/update-file! app-state filename update-in [:bytes-received]
+          (fnil + 0) (count (:bytes resp)))
 
         (-> nzb-file
           (assoc-in [:segment :downloaded-file] result)
           (dissoc :reply)))
 
       (catch Exception e
-        (state/set-state! app-state assoc-in
-          [:downloads filename :segments message-id]
-          {:status :failed
-           :error  (.getMessage e)})
+        (state/update-segment! app-state filename message-id assoc
+          :status :failed
+          :error  (.getMessage e))
         (log/errorf e "worker[%d]: failed downloading %s" n message-id)))))
 
 (defn start-worker
@@ -177,7 +176,7 @@
         (if (authenticated? conn (:nntp cfg))
           (loop []
             (log/debugf "worker[%d]: waiting for work" n)
-            (state/set-state! app-state assoc-in [:workers n] {:status :waiting})
+            (state/set-worker! app-state n :status :waiting)
 
             (if-let [{:keys [reply] :as val} (<!! work)]
               (let [result (download-to-file cfg app-state conn n val)]
@@ -187,9 +186,8 @@
               (log/debugf "worker[%d] exiting" n)))
           (do
             (log/warnf "worker[%d]: failed to authenticate" n)
-            (state/set-state! app-state assoc-in [:workers n]
-              {:status  :fatal
-               :message "Failed to authenticate"})))))
+            (state/set-worker! app-state n
+              :status :fatal :message "Failed to authenticate")))))
     (log/debugf "worker[%d] socket closing" n)))
 
 (defn start-workers
@@ -219,11 +217,9 @@
       (log/debug "waiting for work")
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
-          (state/set-state! app-state assoc-in
-            [:downloads filename :status] :starting)
+          (state/update-file! app-state filename assoc :status :starting)
           (let [result-ch (download file work)]
-            (state/set-state! app-state assoc-in
-              [:downloads filename :status] :downloading)
+            (state/update-file! app-state filename assoc :status :downloading)
             (>!! out (<!! result-ch))
             (recur)))
         (log/debug "exiting")))))

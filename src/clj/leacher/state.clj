@@ -80,3 +80,17 @@
 (defn set-state!
   [app-state f & args]
   (apply swap! (:state app-state) f args))
+
+(defn set-worker!
+  [app-state n & {:as data}]
+  (set-state! app-state assoc-in [:workers n] data))
+
+(defn update-file!
+  [app-state filename f & args]
+  (apply set-state! app-state update-in
+    [:downloads filename] f args))
+
+(defn update-segment!
+  [app-state filename message-id f & args]
+  (apply set-state! app-state update-in
+    [:downloads filename :segments message-id] f args))
