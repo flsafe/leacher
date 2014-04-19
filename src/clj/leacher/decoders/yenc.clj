@@ -111,74 +111,84 @@
 ;; component
 
 (defn start-workers
-  [workers work-ch ctl]
+  [workers {:keys [work]}]
   (let [ctls (mapv chan (range workers))]
-    (thread
-      (<!! ctl)
-      (dotimes [n workers]
-        (async/close! (nth ctls n))))
     (dotimes [n workers]
       (thread
         (loop []
-          (alt!!
-            work-ch
-            ([{:keys [segment reply] :as work}]
-               (when work
-                 (log/infof "worker[%d]: got segment %s" n (:message-id segment))
-                 (try
-                   (if-let [segment-file (:downloaded-file segment)]
-                     (let [decoded (decode-segment segment-file)]
-                       (log/infof "worker[%d]: putting decoded on reply chan" n)
-                       (>!! reply (-> work
-                                      (dissoc :reply)
-                                      (assoc-in [:segment :decoded] decoded))))
-                     (do
-                       (log/warnf "worker[%d]: missing :downloaded-file, skipping decoding" n)
-                       (>!! reply (dissoc work :reply))))
-                   (catch Exception e
-                     (log/errorf e "worker[%d]: failed decoding" n)
-                     ;; TODO: handle error in some way
-                     (>!! reply (dissoc work :reply))))
-                 (recur)))
-
-            (nth ctls n)
-            ([_]
-               (log/infof "worker[%d]: exiting" n))))))))
-
-
-(defrecord YencDecoder [cfg work-ch ctl]
-  component/Lifecycle
-  (start [this]
-    (if-not work-ch
-      (let [work-ch (chan 100)
-            ctl     (chan)]
-        ;; TODO configure number
-        (start-workers 10 work-ch ctl)
-        (assoc this :work-ch work-ch :ctl ctl))
-      this))
-
-  (stop [this]
-    (if work-ch
-      (do
-        (async/close! ctl)
-        (async/close! work-ch)
-        (assoc this :work-ch nil :ctl ctl))
-      this)))
-
-(defn new-decoder
-  [cfg]
-  (map->YencDecoder {:cfg cfg}))
-
-;; public
+          (if-let [{:keys [segment reply] :as val} (<!! work)]
+            (do
+              (try
+                (log/infof "worker[%d]: got segment %s" n (:message-id segment))
+                (if-let [segment-file (:downloaded-file segment)]
+                  (let [decoded (decode-segment segment-file)]
+                    (log/infof "worker[%d]: putting decoded on reply chan" n)
+                    (>!! reply (-> val
+                                 (dissoc :reply)
+                                 (assoc-in [:segment :decoded] decoded))))
+                  (do
+                    (log/warnf "worker[%d]: missing :downloaded-file, skipping decoding" n)
+                    (>!! reply (dissoc val :reply))))
+                (catch Exception e
+                  (log/errorf e "worker[%d]: failed decoding" n)
+                  ;; TODO: handle error in some way
+                  (>!! reply (dissoc val :reply))))
+              (recur))
+            (log/infof "worker[%d]: exiting" n)))))))
 
 (defn decode-file
-  [yenc-decoder file]
+  [file work]
   (let [segments (:segments file)
         replies  (chan (count segments))]
     (doseq [segment (vals segments)]
-      (put! (:work-ch yenc-decoder)
+      (put! work
             {:reply   replies
              :segment segment}))
     (async/reduce (fn [res {:keys [segment]}]
                     (assoc-in res [:segments (:message-id segment)] segment))
                   file (async/take (count segments) replies))))
+
+(defn start-listening
+  [cfg {:keys [in work out]}]
+  (thread
+    (loop []
+      (if-let [{:keys [filename] :as file} (<!! in)]
+        (do
+          (log/info "got file to decode" filename)
+          (let [result (<!! (decode-file file work))]
+            (log/info "combining decoded parts for" filename)
+            (let [combined-file (io/file (-> cfg :dirs :temp) (:filename file))]
+              (io/make-parents combined-file)
+              (write-to file combined-file)
+              (log/info "putting combined file on out chan")
+              (>!! out
+                (assoc file :combined-file combined-file)))))
+        (log/info "exiting listening loop")))))
+
+(defrecord YencDecoder [cfg channels]
+  component/Lifecycle
+  (start [this]
+    (if-not channels
+      (let [channels {:in   (chan)
+                      :out  (chan)
+                      :ctl  (chan)
+                      :work (chan)}]
+        (log/info "starting")
+        ;; TODO configure number
+        (start-workers 10 channels)
+        (start-listening cfg channels)
+        (assoc this :channels channels))
+      this))
+
+  (stop [this]
+    (if channels
+      (do
+        (log/info "stopping")
+        (doseq [[_ ch] channels]
+          (async/close! ch))
+        (assoc this :channels channels))
+      this)))
+
+(defn new-decoder
+  [cfg]
+  (map->YencDecoder {:cfg cfg}))

@@ -8,10 +8,12 @@
             [com.stuartsierra.component :as component]
             [leacher.config :as config]
             [leacher.nntp :as nntp]
+            [leacher.nzb :as nzb]
             [leacher.decoders.yenc :as yenc]
             [leacher.state :as state]
             [leacher.watcher :as watcher]
             [leacher.conductor :as conductor]
+            [leacher.cleaner :as cleaner]
             [leacher.ui.http :as http]
             [leacher.ui.ws :as ws])
   (:gen-class))
@@ -21,7 +23,7 @@
 (defn add-shutdown-hook
   [f]
   (.addShutdownHook (java.lang.Runtime/getRuntime)
-                    (Thread. ^Runnable f)))
+    (Thread. ^Runnable f)))
 
 (defmacro on-shutdown
   [& body]
@@ -32,9 +34,11 @@
 (def components
   [:app-state
    :nntp
+   :nzb-parser
    :yenc-decoder
    :watcher
    :conductor
+   :cleaner
    :http
    :ws])
 
@@ -50,17 +54,22 @@
 (defn new-leacher-system
   [cfg]
   (map->LeacherSystem
-   {:cfg          cfg
-    :app-state    (state/new-app-state (:app-state cfg))
-    :watcher      (watcher/new-watcher (-> cfg :dirs :queue))
-    :nntp         (component/using (nntp/new-nntp (:nntp cfg))
-                                   [:app-state])
-    :yenc-decoder (yenc/new-decoder {})
-    :conductor    (component/using (conductor/new-conductor cfg)
-                                   [:app-state :watcher :nntp :yenc-decoder])
-    :http         (http/new-http-server (:http-server cfg))
-    :ws           (component/using (ws/new-ws-api (:ws-server cfg))
-                                   [:app-state])}))
+    {:cfg          cfg
+     :app-state    (state/new-app-state (:app-state cfg))
+     :watcher      (watcher/new-watcher (-> cfg :dirs :queue))
+     :nzb-parser   (component/using (nzb/new-nzb-parser)
+                     [:app-state])
+     :nntp         (component/using (nntp/new-nntp cfg)
+                     [:app-state])
+     :yenc-decoder (component/using (yenc/new-decoder {})
+                     [:app-state])
+     :cleaner      (component/using (cleaner/new-cleaner cfg)
+                     [:app-state])
+     :conductor    (component/using (conductor/new-conductor cfg)
+                     [:watcher :nzb-parser :nntp :yenc-decoder :cleaner])
+     :http         (http/new-http-server (:http-server cfg))
+     :ws           (component/using (ws/new-ws-api (:ws-server cfg))
+                     [:app-state])}))
 
 ;; entry point
 

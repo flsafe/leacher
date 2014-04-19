@@ -2,7 +2,11 @@
   (:require [clojure.xml :as xml]
             [clojure.java.io :as io]
             [clojure.zip :as zip]
-            [clojure.data.zip.xml :as zip-xml])
+            [clojure.data.zip.xml :as zip-xml]
+            [clojure.core.async :as async :refer [thread >!! <!! alt!! chan]]
+            [clojure.tools.logging :as log]
+            [com.stuartsierra.component :as component]
+            [leacher.state :as state])
   (:import (javax.xml.parsers SAXParser SAXParserFactory)
            (java.io BufferedInputStream)
            (clojure.lang XMLHandler)))
@@ -71,6 +75,48 @@
       (->> (mapv ->file)
         (mapv (juxt :filename identity))
         (into {}))))
+
+;; component
+
+(defn start-listening
+  [{:keys [in out]} app-state]
+  (thread
+    (loop []
+      (alt!!
+        in
+        ([f]
+           (if f
+             (do
+               (try
+                 (doseq [[filename file] (parse f)]
+                   (log/info "putting" filename "on out chan")
+                   (>!! out file))
+                 (catch Exception e
+                   (log/error e "failed to parser nzb file:" (str f))))
+               (recur))
+
+             (log/info "exiting")))))))
+
+(defrecord NzbParser [channels app-state]
+  component/Lifecycle
+  (start [this]
+    (if-not channels
+      (let [channels {:in (chan) :out (chan)}]
+        (start-listening channels app-state)
+        (assoc this :channels channels))
+      this))
+
+  (stop [this]
+    (if channels
+      (do
+        (doseq [[_ ch] channels]
+          (async/close! ch))
+        (assoc this :channels nil))
+      this)))
+
+(defn new-nzb-parser
+  []
+  (map->NzbParser {}))
 
 (comment
   (first (parse "/home/gareth/.leacher/slayer.nzb"))

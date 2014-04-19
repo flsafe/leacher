@@ -7,7 +7,7 @@
             [clojure.core.async :as async :refer [thread <!! >!! chan alt!!]]))
 
 (defn start-watching
-  [dir events ctl]
+  [dir {:keys [out ctl]}]
   (let [glob (str dir "/*.nzb")]
     (thread
       (loop [previous #{}]
@@ -17,9 +17,9 @@
              (let [current   (set (fs/glob glob))
                    new-files (set/difference current previous)]
                (when-not (empty? new-files)
-                 (log/info "detected new files" new-files)
                  (doseq [f new-files]
-                   (>!! events f)))
+                   (log/info "putting new file" f "on out chan")
+                   (>!! out f)))
                (recur current)))
 
           ctl
@@ -28,38 +28,26 @@
 
 ;; component
 
-(defrecord Watcher [dir events ctl app-state]
+(defrecord Watcher [dir channels app-state]
   component/Lifecycle
   (start [this]
-    (if-not events
-      (let [events (chan)
-            ctl    (chan)]
+    (if-not channels
+      (let [channels {:out (chan)
+                      :ctl (chan)}]
         (log/info "starting to watch" dir)
-        (start-watching dir events ctl)
-        (assoc this :events events :ctl ctl))
+        (start-watching dir channels)
+        (assoc this :channels channels))
       this))
 
   (stop [this]
-    (if events
+    (if channels
       (do
         (log/info "stopping")
-        (async/close! ctl)
-        (async/close! events)
-        (assoc this :events nil :ctl nil))
+        (doseq [[_ ch] channels]
+          (async/close! ch))
+        (assoc this :channels nil))
       this)))
 
 (defn new-watcher
   [dir]
   (map->Watcher {:dir dir}))
-
-(comment
-  (def w (component/start (new-watcher "/home/gareth/.leacher/queue")))
-  (component/stop w)
-  (async/close! (:ctl w))
-  (thread
-    (loop []
-      (when-let [f (<!! (:ch w))]
-        (println f)
-        (recur))))
-
-  )

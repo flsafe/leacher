@@ -33,10 +33,10 @@
 (defn write
   [conn ^String msg]
   (doto ^Writer (:out conn)
-    (.write msg)
-    (.write ^int RETURN)
-    (.write ^int NEW_LINE)
-    (.flush)))
+        (.write msg)
+        (.write ^int RETURN)
+        (.write ^int NEW_LINE)
+        (.flush)))
 
 (def response-re #"(\d{3}) (.*)")
 
@@ -61,33 +61,33 @@
         (let [[k v] (string/split line #":" 2)
               k     (keyword (string/lower-case k))
               v     (string/trim v)]
-              (recur (assoc res k v)))))))
+          (recur (assoc res k v)))))))
 
 (defn byte-body-response
   [{^BufferedReader in :in}]
   (let [b   (ByteArrayOutputStream.)]
-   (loop [previous nil]
-     (let [c (.read in)]
-       ;; if first char after newline is dot, check for dot-stuffing
-       (if (and (= NEW_LINE previous) (= DOT c))
-         (let [c2 (.read in)]
-           (condp = c2
-             ;; undo dot-stuffing, throw away one dot
-             DOT
-             (do
-               (.write b c2)
-               (recur c2))
+    (loop [previous nil]
+      (let [c (.read in)]
+        ;; if first char after newline is dot, check for dot-stuffing
+        (if (and (= NEW_LINE previous) (= DOT c))
+          (let [c2 (.read in)]
+            (condp = c2
+              ;; undo dot-stuffing, throw away one dot
+              DOT
+              (do
+                (.write b c2)
+                (recur c2))
 
-             ;; end of message indicator, read and throw away crlf and return
-             RETURN
-             (do
-               (.read in)
-               (.toByteArray b))
+              ;; end of message indicator, read and throw away crlf and return
+              RETURN
+              (do
+                (.read in)
+                (.toByteArray b))
 
-             (throw (Exception. (str "unexpected character after '.':" c2)))))
-         (do
-           (.write b c)
-           (recur c)))))))
+              (throw (Exception. (str "unexpected character after '.':" c2)))))
+          (do
+            (.write b c)
+            (recur c)))))))
 
 (defn authenticate
   [conn user password]
@@ -168,63 +168,91 @@
         (log/errorf e "failed downloading %s" message-id)))))
 
 (defn start-worker
-  [cfg work-chan ctl app-state n]
+  [cfg app-state {:keys [work]} n]
   (log/info "starting worker" n)
   (thread
-    (let [conn (connect cfg)]
+    (let [conn (connect (:nntp cfg))]
       (with-open [socket ^Socket (:socket conn)]
-        (if (authenticated? conn cfg)
+        (if (authenticated? conn (:nntp cfg))
           (loop []
             (log/infof "worker[%d]: waiting for work" n)
             (state/set-state! app-state assoc-in
               [:workers n] {:status :waiting})
             (alt!!
-              work-chan
-              ([work]
-                 (if work
+              work
+              ([val]
+                 (if val
                    (do
-                     (let [file (download-to-file cfg app-state conn n work)]
+                     (let [file (download-to-file cfg app-state conn n val)]
                        (log/infof "worker[%d]: replying" n)
-                       (>!! (:reply work)
-                            (-> work
-                                (dissoc :reply)
-                                (assoc-in [:segment :downloaded-file] file))))
+                       (>!! (:reply val)
+                         (-> val
+                           (dissoc :reply)
+                           (assoc-in [:segment :downloaded-file] file))))
                      (recur))
-                   (log/infof "worker[%d] exiting" n)))
-
-              ctl
-              ([_]
-                 (log/infof "worker[%d] got interupt" n))))
+                   (log/infof "worker[%d] exiting" n)))))
           (state/set-state! app-state assoc-in
             [:workers n]
             {:status :error :message "Failed to authenticate"}))))
-      (log/infof "worker[%d] socket closing" n)))
+    (log/infof "worker[%d] socket closing" n)))
 
 (defn start-workers
-  [cfg work-chan ctls app-state]
-  (mapv #(start-worker cfg work-chan (nth ctls %) app-state %)
-        (range (:max-connections cfg))))
+  [cfg app-state channels]
+  (mapv #(start-worker cfg app-state channels %)
+    (range (:max-connections cfg))))
 
-(defrecord Nntp [cfg workers work-chan app-state ctls]
+(defn download
+  [{:keys [filename] :as file} work]
+  (let [replies  (chan)
+        segments (:segments file)]
+    (doseq [segment (vals segments)]
+      (put! work
+        {:reply      replies
+         :file       file
+         :segment    segment}))
+    (async/reduce (fn [res {:keys [segment]}]
+                    (let [{:keys [message-id]} segment]
+                      (assoc-in res [:segments message-id] segment)))
+      file (async/take (count segments) replies))))
+
+;; could start n listening to have more than one nzb file on the go at once?
+(defn start-listening
+  [app-state {:keys [in out work]}]
+  (thread
+    (loop []
+      (alt!!
+        in
+        ([{:keys [filename] :as file}]
+           (if file
+             (do
+               (state/set-state! app-state assoc-in
+                 [:downloads filename :status] :starting)
+               (let [result-ch (download file work)]
+                 (state/set-state! app-state assoc-in
+                   [:downloads filename :status] :downloading)
+                 (>!! out (<!! result-ch))
+                 (recur)))
+             (log/info "exiting loop")))))))
+
+(defrecord Nntp [cfg app-state channels]
   component/Lifecycle
   (start [this]
-    (if workers
+    (if channels
       this
-      (let [ctls      (mapv chan (range (:max-connections cfg)))
-            work-chan (chan)]
+      (let [channels {:in   (chan)
+                      :out  (chan)
+                      :work (chan)}]
         (log/info "starting")
-        (assoc this
-          :workers (start-workers cfg work-chan ctls app-state)
-          :work-chan work-chan
-          :ctls ctls))))
+        (start-listening app-state channels)
+        (start-workers cfg app-state channels)
+        (assoc this :channels channels))))
   (stop [this]
-    (if workers
+    (if channels
       (do
         (log/info "stopping")
-        (close! work-chan)
-        (doseq [ctl ctls]
-          (close! ctl))
-        (assoc this :workers nil :work-chan nil :ctls nil))
+        (doseq [[_ ch] channels]
+          (close! ch))
+        (assoc this :channels nil))
       this)))
 
 (defn new-nntp
@@ -232,17 +260,3 @@
   (map->Nntp {:cfg cfg}))
 
 ;; public
-
-(defn download
-  [nntp {:keys [filename] :as file}]
-  (let [replies  (chan)
-        segments (:segments file)]
-    (doseq [segment (vals segments)]
-      (put! (:work-chan nntp)
-            {:reply      replies
-             :file       file
-             :segment    segment}))
-    (async/reduce (fn [res {:keys [segment]}]
-                    (let [{:keys [message-id]} segment]
-                      (assoc-in res [:segments message-id] segment)))
-                  file (async/take (count segments) replies))))

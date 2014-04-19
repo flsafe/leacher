@@ -12,7 +12,7 @@
                  [org.clojure/data.json "0.2.4"]
 
                  ;; misc external
-                 [me.raynes/fs "1.4.4"]
+                 [me.raynes/fs "1.4.5"]
                  [clojure-lanterna "0.9.4"]
 
                  ;; blue haired stuart's libraries
@@ -20,10 +20,10 @@
                  [com.stuartsierra/component "0.2.1"]
 
                  ;; http stuff
-                 [ring "1.2.1"]
+                 [ring "1.2.2"]
                  [ring-cors "0.1.0"]
                  [hiccup "1.0.5"]
-                 [http-kit "2.1.16"]
+                 [http-kit "2.1.18"]
                  [compojure "1.1.6"]
                  [fogus/ring-edn "0.2.0"]
                  [hiccup "1.0.5"]
