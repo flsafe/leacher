@@ -199,7 +199,7 @@
 (defn start-workers
   [cfg app-state channels]
   (mapv #(start-worker cfg app-state channels %)
-    (range (:max-connections cfg))))
+    (range (-> cfg :nntp :max-connections))))
 
 (defn download
   [{:keys [filename] :as file} work]

@@ -61,7 +61,7 @@
                      [:app-state])
      :nntp         (component/using (nntp/new-nntp cfg)
                      [:app-state])
-     :yenc-decoder (component/using (yenc/new-decoder {})
+     :yenc-decoder (component/using (yenc/new-decoder cfg)
                      [:app-state])
      :cleaner      (component/using (cleaner/new-cleaner cfg)
                      [:app-state])

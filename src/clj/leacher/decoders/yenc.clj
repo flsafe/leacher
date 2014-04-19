@@ -147,21 +147,31 @@
                     (assoc-in res [:segments (:message-id segment)] segment))
                   file (async/take (count segments) replies))))
 
+(defn combine-file
+  [cfg {:keys [filename] :as file}]
+  (log/info "combining decoded parts for" filename)
+  (let [combined-file (io/file (-> cfg :dirs :temp) filename)]
+    (io/make-parents combined-file)
+    (write-to file combined-file)
+    combined-file))
+
 (defn start-listening
   [cfg {:keys [in work out]}]
   (thread
     (loop []
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
-          (log/info "got file to decode" filename)
-          (let [result (<!! (decode-file file work))]
-            (log/info "combining decoded parts for" filename)
-            (let [combined-file (io/file (-> cfg :dirs :temp) (:filename file))]
-              (io/make-parents combined-file)
-              (write-to file combined-file)
+          (try
+            (log/info "got file to decode" filename)
+            (let [file          (<!! (decode-file file work))
+                  combined-file (combine-file cfg file)]
               (log/info "putting combined file on out chan")
               (>!! out
-                (assoc file :combined-file combined-file)))))
+                (assoc file :combined-file combined-file)))
+            (catch Exception e
+              (log/error e "failed decoding file" filename)
+              (>!! out file)))
+          (recur))
         (log/info "exiting listening loop")))))
 
 (defrecord YencDecoder [cfg channels]
