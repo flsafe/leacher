@@ -9,6 +9,7 @@
                  :user     ""
                  :password ""
                  :max-connections 2}
+   :decoders    10
    :app-state   {:path (str home-dir "state.edn")}
    :dirs        {:complete (str home-dir "/complete")
                  :queue    (str home-dir "/queue")

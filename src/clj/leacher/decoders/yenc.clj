@@ -111,30 +111,29 @@
 ;; component
 
 (defn start-workers
-  [workers {:keys [work]}]
-  (let [ctls (mapv chan (range workers))]
-    (dotimes [n workers]
-      (thread
-        (loop []
-          (if-let [{:keys [segment reply] :as val} (<!! work)]
-            (do
-              (try
-                (log/infof "worker[%d]: got segment %s" n (:message-id segment))
-                (if-let [segment-file (:downloaded-file segment)]
-                  (let [decoded (decode-segment segment-file)]
-                    (log/infof "worker[%d]: putting decoded on reply chan" n)
-                    (>!! reply (-> val
-                                 (dissoc :reply)
-                                 (assoc-in [:segment :decoded] decoded))))
-                  (do
-                    (log/warnf "worker[%d]: missing :downloaded-file, skipping decoding" n)
-                    (>!! reply (dissoc val :reply))))
-                (catch Exception e
-                  (log/errorf e "worker[%d]: failed decoding" n)
-                  ;; TODO: handle error in some way
+  [{:keys [decoders]} {:keys [work]}]
+  (dotimes [n decoders]
+    (thread
+      (loop []
+        (if-let [{:keys [segment reply] :as val} (<!! work)]
+          (do
+            (try
+              (log/infof "worker[%d]: got segment %s" n (:message-id segment))
+              (if-let [segment-file (:downloaded-file segment)]
+                (let [decoded (decode-segment segment-file)]
+                  (log/infof "worker[%d]: putting decoded on reply chan" n)
+                  (>!! reply (-> val
+                               (dissoc :reply)
+                               (assoc-in [:segment :decoded] decoded))))
+                (do
+                  (log/warnf "worker[%d]: missing :downloaded-file, skipping decoding" n)
                   (>!! reply (dissoc val :reply))))
-              (recur))
-            (log/infof "worker[%d]: exiting" n)))))))
+              (catch Exception e
+                (log/errorf e "worker[%d]: failed decoding" n)
+                ;; TODO: handle error in some way
+                (>!! reply (dissoc val :reply))))
+            (recur))
+          (log/infof "worker[%d]: exiting" n))))))
 
 (defn decode-file
   [file work]
@@ -171,11 +170,9 @@
     (if-not channels
       (let [channels {:in   (chan)
                       :out  (chan)
-                      :ctl  (chan)
                       :work (chan)}]
         (log/info "starting")
-        ;; TODO configure number
-        (start-workers 10 channels)
+        (start-workers cfg channels)
         (start-listening cfg channels)
         (assoc this :channels channels))
       this))
