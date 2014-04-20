@@ -23,6 +23,7 @@
     [:div#app]
     (include-js
       "js/react.js"
+      "js/moment.js"
       "js/app.js")]))
 
 (defroutes all-routes

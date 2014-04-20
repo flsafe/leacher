@@ -8,12 +8,13 @@ ul#workers {
 
 ul#key li {
     margin-right: 1px;
+    display: inline;
 }
 
 ul#workers li {
     float: left;
-    width: 20px;
-    height: 20px;
+    width: 15px;
+    height: 15px;
     margin: 0 1px 1px 0;
 }
 
@@ -23,11 +24,11 @@ ul#workers li {
 .pinging     { background: #369; }
 
 #downloads {
-    margin-top: 20px;
+
 }
 
 ul#downloads li {
-    padding:  5px 0 0 0;
+    padding:  5px 0 10px 0;
     margin: 0;
     border-bottom: 1px solid #ccc;
     position: relative;
@@ -35,16 +36,18 @@ ul#downloads li {
 
 #downloads h4 {
     text-transform: uppercase;
+    margin-bottom: 5px;
 }
 
 #downloads p {
     font-family: Georgia;
-    margin-top: -0.5em;
+    margin: 0;
+    padding: 0;
     color: #666;
     font-style: italic;
 }
 
-#downloads .poster, #downloads .groups, #downloads .segments {
+#downloads p span.data {
     font-family: Helvetica, sans-serif;
     font-style: normal;
     color: #369;

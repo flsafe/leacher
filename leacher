@@ -1,0 +1,1 @@
+lein trampoline run

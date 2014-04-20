@@ -240,7 +240,8 @@
           (state/set-file! app-state filename
             (-> file
               (dissoc :segments)
-              (assoc :status :starting)))
+              (assoc :status :starting
+                     :started-at (System/currentTimeMillis))))
           (let [result-ch (download file work)]
             (state/update-file! app-state filename assoc :status :downloading)
             (>!! out (<!! result-ch))

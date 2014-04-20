@@ -165,9 +165,13 @@
         (do
           (try
             (log/debug "got file" filename)
-            (state/update-file! app-state filename assoc :status :decoding)
+            (state/update-file! app-state filename assoc
+              :status :decoding
+              :decoding-started-at (System/currentTimeMillis))
             (let [file          (<!! (decode-file file work))
                   combined-file (combine-file cfg file)]
+              (state/update-file! app-state filename assoc
+                :decoding-finished-at (System/currentTimeMillis))
               (log/debug "putting" filename "on out")
               (>!! out
                 (assoc file :combined-file combined-file)))
