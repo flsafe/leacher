@@ -10,6 +10,7 @@
             [leacher.state :as state]
             [leacher.decoders.yenc :as yenc])
   (:import (java.net Socket)
+           (javax.net.ssl SSLSocketFactory)
            (java.io PrintWriter InputStreamReader BufferedReader Reader Writer ByteArrayOutputStream RandomAccessFile)
            (java.lang StringBuilder)))
 
@@ -22,8 +23,11 @@
 (declare response)
 
 (defn connect
-  [{:keys [host port]}]
-  (let [socket (Socket. ^String host ^Long port)
+  [{:keys [host port ssl?]}]
+  (let [socket (if ssl?
+                 (.createSocket (SSLSocketFactory/getDefault)
+                   ^String host ^int port)
+                 (Socket. ^String host ^Long port))
         conn   {:socket socket
                 :in     (io/reader socket :encoding ENCODING)
                 :out    (io/writer socket :encoding ENCODING)}]
