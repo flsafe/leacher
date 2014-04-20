@@ -26,7 +26,8 @@
             (fs/rename combined complete))
 
           (state/update-file! app-state filename assoc
-            :status :completed))
+            :status :completed)
+          (recur))
 
         (log/debug "exiting")))))
 

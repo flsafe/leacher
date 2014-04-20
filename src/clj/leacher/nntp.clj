@@ -231,7 +231,9 @@
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
           (state/set-file! app-state filename
-            (assoc file :status :starting))
+            (-> file
+              (dissoc :segments)
+              (assoc :status :starting)))
           (let [result-ch (download file work)]
             (state/update-file! app-state filename assoc :status :downloading)
             (>!! out (<!! result-ch))

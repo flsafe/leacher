@@ -2,7 +2,8 @@
   (:require [org.httpkit.server :refer [run-server with-channel send! on-close on-receive close]]
             [com.stuartsierra.component :as component]
             [clojure.tools.logging :as log]
-            [leacher.state :as state]))
+            [leacher.state :as state]
+            [clojure.core.async :as async :refer [thread <!! >!! sliding-buffer chan]]))
 
 ;; ws component
 
@@ -23,24 +24,36 @@
                 (swap! clients disj channel)))))
 
 (defn on-update
-  [clients key ref old new]
-  (let [to-send (state-event new)]
-    (doseq [ch @clients]
-      (send! ch to-send))))
+  [ch key ref old new]
+  (async/put! ch new))
 
-(defrecord WsApi [cfg app-state clients stop-server-fn]
+(defn start-publisher
+  [clients ch]
+  (thread
+    (loop []
+      (when-let [v (<!! ch)]
+        (let [to-send (state-event v)]
+          (doseq [ch @clients]
+            (send! ch to-send)))
+        ;; woah there
+        (Thread/sleep 100)
+        (recur)))))
+
+(defrecord WsApi [cfg app-state clients stop-server-fn events ch]
   component/Lifecycle
   (start [this]
     (if stop-server-fn
       this
       (let [clients        (atom #{})
-            stop-server-fn (run-server (partial ws-handler clients app-state)
-                             cfg)]
+            ch             (chan (sliding-buffer 1))
+            stop-server-fn (run-server (partial ws-handler clients app-state) cfg)]
         (log/info "starting")
-        (state/watch app-state :ws-watch (partial on-update clients))
+        (start-publisher clients ch)
+        (state/watch app-state :ws-watch (partial on-update ch))
         (assoc this
           :stop-server-fn stop-server-fn
-          :clients clients))))
+          :clients clients
+          :ch ch))))
 
   (stop [this]
     (if stop-server-fn
@@ -49,9 +62,10 @@
         (state/stop-watching app-state :ws-watch)
         (doseq [c @clients]
           (close c))
+        (async/close! ch)
         (stop-server-fn)
         (reset! clients (atom #{}))
-        (assoc this :stop-server-fn nil :clients nil))
+        (assoc this :stop-server-fn nil :clients nil :ch nil))
       this)))
 
 (defn new-ws-api

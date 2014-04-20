@@ -42,7 +42,6 @@
 
 (defmethod handle-event :message
   [{:keys [data]}]
-  (println data)
   (swap! app-state merge (:data data)))
 
 (defn ->bytes-display
