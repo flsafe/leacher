@@ -15,6 +15,18 @@
 
 (enable-console-print!)
 
+(def app-state (atom {:downloads {}
+                      :workers   {}}))
+
+(def status->cls
+  {:downloading :warning
+   :completed   :success
+   :error       :danger
+   :decoding    :primary
+   :cleaning    :info})
+
+;; websocket stuff
+
 (defn ws-chan
   []
   (let [c   (chan)
@@ -31,9 +43,6 @@
     (.open ws "ws://localhost:8091/ws")
     c))
 
-(def app-state (atom {:downloads {}
-                      :workers   {}}))
-
 (defmulti handle-event :type)
 
 (defmethod handle-event :default
@@ -43,6 +52,8 @@
 (defmethod handle-event :message
   [{:keys [data]}]
   (swap! app-state merge (:data data)))
+
+;; utils
 
 (defn ->bytes-display
   [b]
@@ -54,43 +65,78 @@
       (< b 1.1e+12)  (str (.toFixed (/ b 1024 1024 1024) 2) "gb")
       :else ">1tb")))
 
+(defn label
+  [cls text & {:as attrs}]
+  (dom/span #js {:className (str "label label-" (name cls))}
+    text))
+
+(defn badge
+  [text]
+  (dom/span #js {:className "badge"}
+    text))
+
+;; page elements
+
 (defn download-item
   [[filename file] owner]
   (dom/li nil
-    filename " "
-    (->bytes-display (get file :bytes-received 0)) " of "
-    (->bytes-display (:total-bytes file)) " in "
-    (:total-segments file) " segments: "
-    (name (:status file))))
-
-(defmulti worker-item (fn [[_ w] _] (:status w)))
-
-(defmethod worker-item :default
-  [[_ w] owner]
-  (dom/li #js {:className "waiting"}
+    (dom/h4 nil
+      filename " "
+      (dom/span #js {:className "small"}
+        (->bytes-display (:bytes-received file)) "/"
+        (->bytes-display (:total-bytes file))))
+    (dom/div #js {:className "status"}
+      (label (get status->cls (:status file) :default)
+        (-> file :status name)))
+    (dom/p nil
+      "in "
+      (dom/span #js {:className "groups"}
+        (string/join ", " (:groups file)))
+      " posted by "
+      (dom/span #js {:className "poster"}
+        (:poster file))
+      " with "
+      (dom/span #js {:className "segments"}
+        (:segments-completed file) "/" (:total-segments file))
+      " segments")
+    ;; (->bytes-display (get file :bytes-received 0)) " of "
+    ;; (->bytes-display (:total-bytes file)) " in "
+    ;; (badge (:total-segments file)) " segments"
     ))
 
-(defmethod worker-item :downloading
-  [[_ w] owner]
-  (dom/li #js {:className "orange-bg"}
-    ))
+(defn downloads-section
+  [downloads]
+  (dom/div #js {:className "col-md-10"}
+    (dom/h2 nil "Downloads "
+      (dom/span #js {:className "small"}
+        "All your illegal files"))
+    (apply dom/ul #js {:id "downloads" :className "list-unstyled"}
+      (om/build-all download-item downloads))))
 
-(defmethod worker-item :error
+(defn worker-item
   [[_ w] owner]
-  (dom/li #js {:className "error"}
-    ))
+  (dom/li #js {:className (-> w :status name)}))
 
-(defn key-info
-  []
-  (dom/ul #js {:id "key list-unstyled"}
-    (dom/li #js {:className "label label-default"}
-      "Waiting")
-    (dom/li #js {:className "label label-primary"}
-      "Working")
-    (dom/li #js {:className "label label-success"}
-      "Success")
-    (dom/li #js {:className "label label-danger"}
-      "Error")))
+(defn workers-section
+  [workers]
+  (dom/div #js {:className "col-md-2"}
+    (dom/ul #js {:className "list-unstyled"
+                 :id "key"}
+      (dom/li nil
+        (dom/span #js {:className "label waiting"}
+          "Waiting"))
+      (dom/li nil
+        (dom/span #js {:className "label downloading"}
+          "Downloading"))
+      (dom/li nil
+        (dom/span #js {:className "label pinging"}
+          "Pinging"))
+      (dom/li nil
+        (dom/span #js {:className "label fatal"}
+          "Fatal")))
+    (apply dom/ul #js {:className "list-unstyled"
+                       :id "workers"}
+      (om/build-all worker-item workers))))
 
 (defn leacher-app
   [{:keys [downloads workers] :as app} owner]
@@ -107,25 +153,8 @@
     (render [this]
       (dom/div #js {:className "container"}
         (dom/div #js {:className "row"}
-          (dom/div #js {:className "col-md-12"}
-            (key-info)))
-        (dom/div #js {:className "row"}
-          (dom/div #js {:className "col-md-12"}
-            (dom/h2 nil "Leaching "
-              (dom/span #js {:className "small"}
-                (dom/span #js {:className "badge"}
-                  (count workers)) " connections"))
-            (apply dom/ul #js {:className "list-unstyled" :id "workers"}
-              (om/build-all worker-item workers))))
-        (dom/div #js {:className "clearfix"})
-
-        (dom/div #js {:className "row"}
-          (dom/div #js {:className "col-md-12"}
-            (dom/h2 nil "Downloads "
-              (dom/span #js {:className "small"}
-                "All your illegal files"))
-            (apply dom/ul #js {:id "downloads"}
-              (om/build-all download-item downloads))))))))
+          (workers-section workers)
+          (downloads-section downloads))))))
 
 (om/root leacher-app app-state
   {:target (.getElementById js/document "app")})

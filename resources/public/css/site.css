@@ -2,22 +2,56 @@ body {
     margin: 20px;
 }
 
-ul#key, ul#key li {
-    margin: 0;
-    padding: 0;
-}
-
 ul#workers {
     clear: both;
 }
 
+ul#key li {
+    margin-right: 1px;
+}
+
 ul#workers li {
     float: left;
-    width: 25px;
-    height: 25px;
+    width: 20px;
+    height: 20px;
     margin: 0 1px 1px 0;
 }
 
-li.waiting {
-    background: #93a1a1;
+.waiting     { background: #999; }
+.downloading { background: #0c0; }
+.fatal       { background: #c00; }
+.pinging     { background: #369; }
+
+#downloads {
+    margin-top: 20px;
+}
+
+ul#downloads li {
+    padding:  5px 0 0 0;
+    margin: 0;
+    border-bottom: 1px solid #ccc;
+    position: relative;
+}
+
+#downloads h4 {
+    text-transform: uppercase;
+}
+
+#downloads p {
+    font-family: Georgia;
+    margin-top: -0.5em;
+    color: #666;
+    font-style: italic;
+}
+
+#downloads .poster, #downloads .groups, #downloads .segments {
+    font-family: Helvetica, sans-serif;
+    font-style: normal;
+    color: #369;
+}
+
+#downloads .status {
+    position: absolute;
+    top: 10px;
+    right: 0;
 }

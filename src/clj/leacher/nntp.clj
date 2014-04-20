@@ -164,8 +164,11 @@
         (state/update-segment! app-state filename message-id assoc
           :status :completed)
 
-        (state/update-file! app-state filename update-in [:bytes-received]
-          (fnil + 0) (count (:bytes resp)))
+        (state/update-file! app-state filename
+          (fn [f]
+            (-> f
+              (update-in [:bytes-received] (fnil + 0) (count (:bytes resp)))
+              (update-in [:segments-completed] (fnil inc 0)))))
 
         (-> val
           (assoc-in [:segment :downloaded-file] result)
