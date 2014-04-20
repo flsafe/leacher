@@ -16,8 +16,10 @@
   []
   (html5
    [:head
-    (include-css "css/site.css")]
-   [:body
+    (include-css
+      "css/bootstrap.min.css"
+      "css/site.css")]
+   [:body.base3
     [:div#app]
     (include-js
       "js/react.js"

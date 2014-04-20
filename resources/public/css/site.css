@@ -1,0 +1,23 @@
+body {
+    margin: 20px;
+}
+
+ul#key, ul#key li {
+    margin: 0;
+    padding: 0;
+}
+
+ul#workers {
+    clear: both;
+}
+
+ul#workers li {
+    float: left;
+    width: 25px;
+    height: 25px;
+    margin: 0 1px 1px 0;
+}
+
+li.waiting {
+    background: #93a1a1;
+}

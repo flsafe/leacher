@@ -67,18 +67,30 @@
 
 (defmethod worker-item :default
   [[_ w] owner]
-  (dom/li nil
-    (-> w :status name)))
+  (dom/li #js {:className "waiting"}
+    ))
 
 (defmethod worker-item :downloading
   [[_ w] owner]
-  (dom/li nil
-    "Downloading " (:filename w) "/" (:message-id w)))
+  (dom/li #js {:className "orange-bg"}
+    ))
 
 (defmethod worker-item :error
   [[_ w] owner]
   (dom/li #js {:className "error"}
-    "Error: " (:message w)))
+    ))
+
+(defn key-info
+  []
+  (dom/ul #js {:id "key list-unstyled"}
+    (dom/li #js {:className "label label-default"}
+      "Waiting")
+    (dom/li #js {:className "label label-primary"}
+      "Working")
+    (dom/li #js {:className "label label-success"}
+      "Success")
+    (dom/li #js {:className "label label-danger"}
+      "Error")))
 
 (defn leacher-app
   [{:keys [downloads workers] :as app} owner]
@@ -93,14 +105,27 @@
               (recur))))))
     om/IRender
     (render [this]
-      (dom/div nil
-        (dom/h1 nil "Leacher")
-        (dom/h2 nil "Downloads")
-        (apply dom/ul #js {:id "downloads"}
-          (om/build-all download-item downloads))
-        (dom/h2 nil "Workers")
-        (apply dom/ul #js {:id "workers"}
-          (om/build-all worker-item workers))))))
+      (dom/div #js {:className "container"}
+        (dom/div #js {:className "row"}
+          (dom/div #js {:className "col-md-12"}
+            (key-info)))
+        (dom/div #js {:className "row"}
+          (dom/div #js {:className "col-md-12"}
+            (dom/h2 nil "Leaching "
+              (dom/span #js {:className "small"}
+                (dom/span #js {:className "badge"}
+                  (count workers)) " connections"))
+            (apply dom/ul #js {:className "list-unstyled" :id "workers"}
+              (om/build-all worker-item workers))))
+        (dom/div #js {:className "clearfix"})
+
+        (dom/div #js {:className "row"}
+          (dom/div #js {:className "col-md-12"}
+            (dom/h2 nil "Downloads "
+              (dom/span #js {:className "small"}
+                "All your illegal files"))
+            (apply dom/ul #js {:id "downloads"}
+              (om/build-all download-item downloads))))))))
 
 (om/root leacher-app app-state
   {:target (.getElementById js/document "app")})
