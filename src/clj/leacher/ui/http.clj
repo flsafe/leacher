@@ -2,7 +2,7 @@
   (:require [clojure.tools.logging :as log]
             [clojure.data.json :as json]
             [com.stuartsierra.component :as component]
-            [compojure.core :refer [defroutes GET context]]
+            [compojure.core :refer [routes GET context]]
             [compojure.handler :refer [site]]
             [hiccup.page :refer [html5 include-js include-css]]
             [org.httpkit.server :as server]
@@ -13,7 +13,7 @@
             [leacher.state :as state]))
 
 (defn index-page
-  []
+  [cfg]
   (html5
    [:head
     (include-css
@@ -24,13 +24,17 @@
     (include-js
       "js/react.js"
       "js/moment.js"
-      "js/app.js")]))
+      "js/app.js")
+    [:script
+     "leacher.ui.app.init(" (pr-str (pr-str cfg)) ");"]]))
 
-(defroutes all-routes
-  (GET "/" [] (index-page)))
+(defn build-routes
+  [cfg]
+  (GET "/" [] (index-page cfg)))
 
-(def app
-  (-> all-routes
+(defn build-app
+  [cfg]
+  (-> (build-routes cfg)
       site
       (ring-resource/wrap-resource "public")
       ring-stacktrace/wrap-stacktrace
@@ -43,7 +47,7 @@
   (start [this]
     (if shutdown-fn
       this
-      (let [shutdown-fn (server/run-server #'app cfg)]
+      (let [shutdown-fn (server/run-server (build-app cfg) (:http-server cfg))]
         (log/info "starting")
         (assoc this :shutdown-fn shutdown-fn))))
   (stop [this]

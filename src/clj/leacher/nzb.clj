@@ -6,7 +6,8 @@
             [clojure.core.async :as async :refer [thread >!! <!! alt!! chan]]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
-            [leacher.state :as state])
+            [leacher.state :as state]
+            [me.raynes.fs :as fs])
   (:import (javax.xml.parsers SAXParser SAXParserFactory)
            (java.io BufferedInputStream)
            (clojure.lang XMLHandler)))
@@ -88,9 +89,15 @@
            (if f
              (do
                (try
-                 (doseq [[filename file] (parse f)]
-                   (log/info "putting" filename "on out chan")
-                   (>!! out file))
+                 (let [files (parse f)]
+                   ;; TODO: check if download already exists
+                   (doseq [[filename file] files]
+                     (state/set-file! app-state filename
+                       (assoc file :status :waiting)))
+                   (doseq [[filename file] files]
+                     (log/info "putting" filename "on out chan")
+                     (>!! out file)
+                     (fs/delete f)))
                  (catch Exception e
                    (log/error e "failed to parser nzb file:" (str f))))
                (recur))

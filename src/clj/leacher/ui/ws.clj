@@ -10,7 +10,9 @@
 (defn state-event
   [state]
   (pr-str {:type :server-state
-           :data state}))
+           :data (update-in state [:downloads]
+                   (fn [files]
+                     (reduce-kv #(assoc %1 %2 (dissoc %3 :segments)) {} files)))}))
 
 (defn ws-handler
   [clients app-state req]

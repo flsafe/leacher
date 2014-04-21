@@ -67,7 +67,7 @@
                      [:app-state])
      :conductor    (component/using (conductor/new-conductor cfg)
                      [:watcher :nzb-parser :nntp :yenc-decoder :cleaner])
-     :http         (http/new-http-server (:http-server cfg))
+     :http         (http/new-http-server cfg)
      :ws           (component/using (ws/new-ws-api (:ws-server cfg))
                      [:app-state])}))
 

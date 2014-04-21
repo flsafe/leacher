@@ -15,7 +15,10 @@
 
 (enable-console-print!)
 
-(def app-state (atom {:downloads {}
+(def config (atom {}))
+
+(def app-state (atom {:websocket :disconnected
+                      :downloads {}
                       :workers   {}}))
 
 (def status->cls
@@ -24,6 +27,21 @@
    :error       :danger
    :decoding    :primary
    :cleaning    :info})
+
+(def music-ext #{"mp3" "m4p" "flac" "ogg"})
+
+(def video-ext #{"avi" "mp4" "mpg" "mkv"})
+
+(def archive-ext #{"zip" "rar" "tar" "gz" "par" "par2"})
+
+(defn file->glyphicon
+  [filename]
+  (let [[_  ext] (re-find  #"\.(.+)$" filename)]
+    (condp contains? ext
+      music-ext   "headphones"
+      video-ext   "film"
+      archive-ext "compressed"
+      :nil)))
 
 ;; websocket stuff
 
@@ -38,9 +56,13 @@
               (goog.events.listen Events/ERROR
                 (fn [e] (put! c {:type :error :event e})))
               (goog.events.listen Events/MESSAGE
-                (fn [e] (let [data (cljs.reader/read-string (.-message e))]
-                         (put! c {:type :message :event e :data data})))))]
-    (.open ws "ws://localhost:8091/ws")
+                (fn [e]
+                  (let [start (.now js/Date)
+                        data (cljs.reader/read-string (.-message e))
+                        finish (.now js/Date)]
+                    (println "read-string took" (- finish start) "ms")
+                    (put! c {:type :message :event e :data data})))))]
+    (.open ws (str "ws://localhost:" (-> @config :ws-server :port) "/ws"))
     c))
 
 (defmulti handle-event :type)
@@ -103,9 +125,12 @@
         total-bytes     (:total-bytes file)
         running-secs    (.as (:duration running-time) "seconds")
         rate            (/ bytes-received running-secs)
-        decoding-time   (time-diff (:decoding-started-at file) (:decoding-finished-at file))]
+        decoding-time   (time-diff (:decoding-started-at file)
+                          (:decoding-finished-at file))]
     (dom/li nil
       (dom/h4 nil
+        (when-let [s (file->glyphicon filename)]
+          (dom/span #js {:className (str "glyphicon glyphicon-" s)}))
         filename " "
         (dom/span #js {:className "small"}
           (->bytes-display bytes-received) "/"
@@ -127,16 +152,16 @@
         (dom/span #js {:className "data"}
           (:segments-completed file) "/" (:total-segments file))
         " segments, "
-        (into (if completed?
-                ["completed in "
-                 (dom/span #js {:className "data"}
-                   (:human running-time))
-                 ", decoded in "
-                 (dom/span #js {:className "data"}
-                   (:human decoding-time))]
-                ["running for "
-                 (dom/span #js {:className "data"}
-                   (:human running-time))]))))))
+        (if completed?
+          ["completed in "
+           (dom/span #js {:className "data"}
+             (:human running-time))
+           ", decoded in "
+           (dom/span #js {:className "data"}
+             (:human decoding-time))]
+          ["running for "
+           (dom/span #js {:className "data"}
+             (:human running-time))])))))
 
 (defn downloads-section
   [downloads]
@@ -145,8 +170,10 @@
       (dom/h3 nil "Downloads "
         (dom/span #js {:className "small"}
           "All your illegal files"))
-      (apply dom/ul #js {:id "downloads" :className "list-unstyled"}
-        (om/build-all download-item downloads)))))
+      (if (zero? (count downloads))
+        (dom/p nil "No downloads? You're not trying hard enough")
+        (apply dom/ul #js {:id "downloads" :className "list-unstyled"}
+          (om/build-all download-item downloads))))))
 
 (defn worker-item
   [[_ w] owner]
@@ -194,5 +221,8 @@
           (workers-section workers)
           (downloads-section downloads))))))
 
-(om/root leacher-app app-state
-  {:target (.getElementById js/document "app")})
+(defn init
+  [cfg]
+  (reset! config (read-string cfg))
+  (om/root leacher-app app-state
+    {:target (.getElementById js/document "app")}))

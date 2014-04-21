@@ -77,6 +77,10 @@
   [app-state & ks]
   (get-in (state app-state) ks))
 
+(defn get-downloads
+  [app-state]
+  (get-state app-state :downloads))
+
 (defn set-state!
   [app-state f & args]
   (apply swap! (:state app-state) f args))

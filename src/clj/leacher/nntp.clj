@@ -218,8 +218,9 @@
 (defn download
   [file work]
   (let [replies  (chan)
-        segments (:segments file)]
-    (doseq [segment (vals segments)]
+        segments (filter #(not= :completed (:status %))
+                   (vals (:segments file)))]
+    (doseq [segment segments]
       (put! work
         {:reply      replies
          :file       file
@@ -229,19 +230,28 @@
                       (assoc-in res [:segments message-id] segment)))
       file (async/take (count segments) replies))))
 
+(defn resume-incomplete
+  [app-state {:keys [out work]}]
+  (try
+    (when-let [files (state/get-downloads app-state)]
+      (doseq [[filename file] files
+              :when (not= :completed (:status file))]
+        (log/info "resuming" filename)
+        (let [result-ch (download file work)]
+          (state/update-file! app-state filename assoc :status :downloading)
+          (>!! out (<!! result-ch)))))
+    (catch Exception e
+      (log/error e "failed restarting incomplete"))))
+
 ;; could start n listening to have more than one nzb file on the go at once?
 (defn start-listening
-  [app-state {:keys [in out work]}]
+  [app-state {:keys [in out work] :as channels}]
   (thread
+    (resume-incomplete app-state channels)
     (loop []
       (log/debug "waiting for work")
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
-          (state/set-file! app-state filename
-            (-> file
-              (dissoc :segments)
-              (assoc :status :starting
-                     :started-at (System/currentTimeMillis))))
           (let [result-ch (download file work)]
             (state/update-file! app-state filename assoc :status :downloading)
             (>!! out (<!! result-ch))

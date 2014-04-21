@@ -19,9 +19,9 @@ ul#workers li {
 }
 
 .waiting     { background: #999; }
-.downloading { background: #0c0; }
-.fatal       { background: #c00; }
-.pinging     { background: #369; }
+.downloading { background: #5cb85c; }
+.fatal       { background: #d9534f; }
+.pinging     { background: #428bca; }
 
 #downloads {
 
@@ -39,6 +39,8 @@ ul#downloads li {
     margin-bottom: 5px;
 }
 
+#downloads h4 .glyphicon { margin-right: 5px; }
+
 #downloads p {
     font-family: Georgia;
     margin: 0;
@@ -54,7 +56,5 @@ ul#downloads li {
 }
 
 #downloads .status {
-    position: absolute;
-    top: 10px;
-    right: 0;
+    float: right;
 }
