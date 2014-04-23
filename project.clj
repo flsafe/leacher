@@ -34,10 +34,11 @@
                  [secretary "1.1.0"]
 
                  ;; omg logging
-                 [log4j "1.2.17"]]
+                 [log4j "1.2.17"]
 
-  :plugins [[lein-cljsbuild "1.0.3"]
-            [com.cemerick/austin "0.1.4"]]
+                 [slamhound "1.5.4"]]
+
+  :plugins [[lein-cljsbuild "1.0.3"]]
 
   :source-paths ["src/clj" "src/cljs"]
 

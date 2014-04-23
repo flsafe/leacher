@@ -1,10 +1,13 @@
 (ns leacher.ui.ws
-  (:require [org.httpkit.server :refer [run-server with-channel send! on-close on-receive close]]
-            [com.stuartsierra.component :as component]
-            [clojure.tools.logging :as log]
-            [leacher.state :as state]
+  (:require [clojure.core.async :as async :refer [<!! chan
+                                                  sliding-buffer
+                                                  thread]]
             [clojure.data :as data]
-            [clojure.core.async :as async :refer [thread <!! >!! sliding-buffer chan]]))
+            [clojure.tools.logging :as log]
+            [com.stuartsierra.component :as component]
+            [leacher.state :as state]
+            [org.httpkit.server :refer [close on-close run-server send!
+                                        with-channel]]))
 
 ;; remove segments from state sent to client, not needed and large
 ;; amount of data

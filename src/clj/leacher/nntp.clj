@@ -1,18 +1,16 @@
 (ns leacher.nntp
-  (:require [clojure.java.io :as io]
+  (:require [clojure.core.async :as async :refer [<!! >!! alt!! chan
+                                                  close! put! thread]]
+            [clojure.java.io :as io]
             [clojure.string :as string]
-            [clojure.core.async :as async
-             :refer [chan thread <!! >!! close! put! alt!!]]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
-            [me.raynes.fs :as fs]
-            [leacher.utils :refer [parse-long]]
             [leacher.state :as state]
-            [leacher.decoders.yenc :as yenc])
-  (:import (java.net Socket)
-           (javax.net.ssl SSLSocketFactory)
-           (java.io PrintWriter InputStreamReader BufferedReader Reader Writer ByteArrayOutputStream RandomAccessFile)
-           (java.lang StringBuilder)))
+            [leacher.utils :refer [parse-long]]
+            [me.raynes.fs :as fs])
+  (:import (java.io BufferedReader ByteArrayOutputStream Writer)
+           (java.net Socket)
+           (javax.net.ssl SSLSocketFactory)))
 
 (def ENCODING "ISO-8859-1")
 

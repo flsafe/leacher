@@ -1,5 +1,4 @@
-(ns leacher.utils
-  (:require [clojure.tools.logging :as log]))
+(ns leacher.utils)
 
 (defn parse-long
   [^String s]
@@ -14,5 +13,12 @@
   [msg & body]
   `(let [start#  (System/currentTimeMillis)
          result# (do ~@body)]
-     (log/info ~msg "took" (format "%.2fs" (* (- (System/currentTimeMillis) start#) 1e-3)))
+     (clojure.tools.logging/info ~msg "took" (format "%.2fs" (* (- (System/currentTimeMillis) start#) 1e-3)))
      result#))
+
+(defmacro loge
+  [msg & body]
+  `(try
+     ~@body
+     (catch Exception e#
+       (clojure.tools.logging/error e# "failed while" ~msg))))

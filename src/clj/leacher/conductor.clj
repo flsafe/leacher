@@ -1,15 +1,11 @@
 (ns leacher.conductor
-  (:require [com.stuartsierra.component :as component]
+  (:require [clojure.core.async :as async]
             [clojure.tools.logging :as log]
-            [clojure.core.async :as async :refer [chan >!! <!! thread alt!!]]
-            [clojure.java.io :as io]
-            [me.raynes.fs :as fs]
-            [leacher.utils :refer [logt]]
-            [leacher.watcher :as watcher]
-            [leacher.nntp :as nntp]
-            [leacher.nzb :as nzb]
-            [leacher.decoders.yenc :as yenc])
-  (:import [java.io RandomAccessFile]))
+            [com.stuartsierra.component :as component]))
+
+;; Some components have a map of channels, typically containing :in,
+;; :out, :ctl. This component wires these together in the appropriate
+;; order.
 
 ;; component
 

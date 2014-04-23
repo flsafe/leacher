@@ -1,10 +1,9 @@
 (ns leacher.state
-  (:require [com.stuartsierra.component :as component]
-            [clojure.core.async :as async :refer [go-loop <! >!]]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.tools.logging :as log]
-            [clojure.edn :as edn]
-            [clojure.java.io :as io])
-  (:import [java.io PushbackReader]))
+            [com.stuartsierra.component :as component])
+  (:import (java.io PushbackReader)))
 
 (comment
 

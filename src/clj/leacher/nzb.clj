@@ -1,16 +1,17 @@
 (ns leacher.nzb
-  (:require [clojure.xml :as xml]
-            [clojure.java.io :as io]
-            [clojure.zip :as zip]
+  (:require [clojure.core.async :as async :refer [>!! alt!! chan
+                                                  thread]]
             [clojure.data.zip.xml :as zip-xml]
-            [clojure.core.async :as async :refer [thread >!! <!! alt!! chan]]
+            [clojure.java.io :as io]
             [clojure.tools.logging :as log]
+            [clojure.xml :as xml]
+            [clojure.zip :as zip]
             [com.stuartsierra.component :as component]
             [leacher.state :as state]
             [me.raynes.fs :as fs])
-  (:import (javax.xml.parsers SAXParser SAXParserFactory)
+  (:import (clojure.lang XMLHandler)
            (java.io BufferedInputStream)
-           (clojure.lang XMLHandler)))
+           (javax.xml.parsers SAXParser SAXParserFactory)))
 
 (defn startparse-sax
   "Don't validate the DTDs, they are usually messed up."

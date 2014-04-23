@@ -1,16 +1,13 @@
 (ns leacher.ui.http
   (:require [clojure.tools.logging :as log]
-            [clojure.data.json :as json]
             [com.stuartsierra.component :as component]
-            [compojure.core :refer [routes GET context]]
+            [compojure.core :refer [GET]]
             [compojure.handler :refer [site]]
-            [hiccup.page :refer [html5 include-js include-css]]
+            [hiccup.page :refer [html5 include-css include-js]]
             [org.httpkit.server :as server]
-            [ring.util.response :refer [response header]]
-            [ring.middleware.resource :as ring-resource]
-            [ring.middleware.stacktrace :as ring-stacktrace]
             [ring.middleware.reload :as ring-reload]
-            [leacher.state :as state]))
+            [ring.middleware.resource :as ring-resource]
+            [ring.middleware.stacktrace :as ring-stacktrace]))
 
 (defn index-page
   [cfg]

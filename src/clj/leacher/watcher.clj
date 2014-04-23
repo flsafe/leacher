@@ -1,10 +1,10 @@
 (ns leacher.watcher
-  (:require [me.raynes.fs :as fs]
-            [leacher.config :as cfg]
-            [com.stuartsierra.component :as component]
-            [clojure.tools.logging :as log]
+  (:require [clojure.core.async :as async :refer [>!! alt!! chan
+                                                  thread]]
             [clojure.set :as set]
-            [clojure.core.async :as async :refer [thread <!! >!! chan alt!!]]))
+            [clojure.tools.logging :as log]
+            [com.stuartsierra.component :as component]
+            [me.raynes.fs :as fs]))
 
 (defn start-watching
   [dir {:keys [out ctl]}]

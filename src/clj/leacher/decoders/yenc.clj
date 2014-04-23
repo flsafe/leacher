@@ -1,14 +1,12 @@
 (ns leacher.decoders.yenc
-  (:require [clojure.java.io :as io]
-            [clojure.string :as string]
-            [clojure.set :as set]
+  (:require [clojure.core.async :as async
+             :refer [<!! >!! chan put! thread]]
+            [clojure.java.io :as io]
             [clojure.tools.logging :as log]
-            [clojure.core.async :as async :refer [thread <!! >!! alt!! chan put!]]
             [com.stuartsierra.component :as component]
-            [me.raynes.fs :as fs]
-            [leacher.utils :refer [parse-long]]
-            [leacher.state :as state])
-  (:import [java.io StringReader BufferedReader BufferedWriter RandomAccessFile]))
+            [leacher.state :as state]
+            [leacher.utils :refer [parse-long]])
+  (:import (java.io BufferedReader RandomAccessFile)))
 
 (def ENCODING "ISO-8859-1")
 
