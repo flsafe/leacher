@@ -26,7 +26,7 @@
       "js/moment.js"
       "js/app.js")
     [:script
-     "leacher.ui.app.init(" (pr-str (pr-str cfg)) ");"]]))
+     "leacher.ui.app.init('" (pr-str cfg) "');"]]))
 
 (defn build-routes
   [cfg]

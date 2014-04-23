@@ -36,7 +36,8 @@
                  ;; omg logging
                  [log4j "1.2.17"]]
 
-  :plugins [[lein-cljsbuild "1.0.3"]]
+  :plugins [[lein-cljsbuild "1.0.3"]
+            [com.cemerick/austin "0.1.4"]]
 
   :source-paths ["src/clj" "src/cljs"]
 

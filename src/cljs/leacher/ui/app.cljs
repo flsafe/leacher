@@ -15,11 +15,90 @@
 
 (enable-console-print!)
 
+;; state
+
 (def config (atom {}))
 
 (def app-state (atom {:websocket :disconnected
                       :downloads {}
                       :workers   {}}))
+
+;; ws handling
+
+(defn deep-merge-with
+  [f & maps]
+  (apply
+   (fn m [& maps]
+     (if (every? map? maps)
+       (apply merge-with m maps)
+       (apply f maps)))
+   maps))
+
+(def deep-merge (partial deep-merge-with (fn [& ms] (last ms))))
+
+(defn apply-removals
+  [m deltas]
+  (reduce (fn [res korks]
+            (if (vector? korks)
+              (let [[f & r] korks
+                    val     (apply-removals (get res f) (vec r))]
+                (if (empty? val)
+                  (dissoc res f)
+                  (assoc res f val)))
+              (dissoc res korks))) m deltas))
+
+(defn apply-deltas
+  [m deltas]
+  ;; (.time js/console "apply-deltas")
+  (let [rm (:remove deltas)
+        md (:modify deltas)
+        res (apply-removals m rm)
+        res (if md
+              (deep-merge res md)
+              res)]
+    ;; (.timeEnd js/console "apply-deltas")
+    res))
+
+(defn ws-chan
+  []
+  (let [c   (chan)
+        ws  (doto (goog.net.WebSocket.)
+              (goog.events.listen Events/OPENED
+                (fn [e] (put! c {:type :opened :event e})))
+              (goog.events.listen Events/CLOSED
+                (fn [e] ))
+              (goog.events.listen Events/ERROR
+                (fn [e] (put! c {:type :error :event e})))
+              (goog.events.listen Events/MESSAGE
+                (fn [e]
+                  ;; (.time js/console "read-string")
+                  (let [data (cljs.reader/read-string (.-message e))]
+                    ;; (.timeEnd js/console "read-string")
+                    (put! c {:type :message :event e :data data})))))]
+    (.open ws (str "ws://localhost:" (-> @config :ws-server :port) "/ws"))
+    c))
+
+(defmulti handle-message :type)
+
+(defmethod handle-message :initial
+  [{:keys [data]}]
+  (reset! app-state data))
+
+(defmethod handle-message :deltas
+  [{:keys [data]}]
+  (swap! app-state apply-deltas data))
+
+(defmulti handle-event :type)
+
+(defmethod handle-event :default
+  [{:keys [type]}]
+  (println "unhandled ws event" (name type)))
+
+(defmethod handle-event :message
+  [{:keys [data]}]
+  (handle-message data))
+
+;; page elements
 
 (def status->cls
   {:downloading :warning
@@ -28,10 +107,8 @@
    :decoding    :primary
    :cleaning    :info})
 
-(def music-ext #{"mp3" "m4p" "flac" "ogg"})
-
-(def video-ext #{"avi" "mp4" "mpg" "mkv"})
-
+(def music-ext   #{"mp3" "m4p" "flac" "ogg"})
+(def video-ext   #{"avi" "mp4" "mpg" "mkv"})
 (def archive-ext #{"zip" "rar" "tar" "gz" "par" "par2"})
 
 (defn file->glyphicon
@@ -43,49 +120,16 @@
       archive-ext "compressed"
       :nil)))
 
-;; websocket stuff
-
-(defn ws-chan
-  []
-  (let [c   (chan)
-        ws  (doto (goog.net.WebSocket.)
-              (goog.events.listen Events/OPENED
-                (fn [e] (put! c {:type :opened :event e})))
-              (goog.events.listen Events/CLOSED
-                (fn [e] (close! c)))
-              (goog.events.listen Events/ERROR
-                (fn [e] (put! c {:type :error :event e})))
-              (goog.events.listen Events/MESSAGE
-                (fn [e]
-                  (let [start (.now js/Date)
-                        data (cljs.reader/read-string (.-message e))
-                        finish (.now js/Date)]
-                    (println "read-string took" (- finish start) "ms")
-                    (put! c {:type :message :event e :data data})))))]
-    (.open ws (str "ws://localhost:" (-> @config :ws-server :port) "/ws"))
-    c))
-
-(defmulti handle-event :type)
-
-(defmethod handle-event :default
-  [{:keys [type]}]
-  (println "ws" (name type)))
-
-(defmethod handle-event :message
-  [{:keys [data]}]
-  (swap! app-state merge (:data data)))
-
-;; utils
-
 (defn ->bytes-display
   [b]
   (when b
     (cond
-      (< b 1024)     (str b "b")
+      (< b 1024)     (str (.toFixed b 0) "b")
       (< b 1048576)  (str (.toFixed (/ b 1024) 0) "kb")
       (< b 1.074e+9) (str (.toFixed (/ b 1024 1024) 2) "mb")
       (< b 1.1e+12)  (str (.toFixed (/ b 1024 1024 1024) 2) "gb")
-      :else ">1tb")))
+      :else
+      ">1tb")))
 
 (defn label
   [cls text & {:as attrs}]
@@ -97,8 +141,6 @@
   (dom/span #js {:className "badge"}
     text))
 
-;; page elements
-
 (defn time-diff
   [from to]
   (let [start    (if from
@@ -108,7 +150,7 @@
                    (.moment js/window to)
                    (js/moment))
         duration (.duration js/moment (.subtract finish start))
-        seconds  (.as duration "seconds")
+        seconds  (.asSeconds duration)
         human    (if (< seconds 60)
                    (str seconds " seconds")
                    (.humanize duration))]
@@ -123,7 +165,7 @@
         running-time    (time-diff (:started-at file) (:finished-at file))
         bytes-received  (:bytes-received file)
         total-bytes     (:total-bytes file)
-        running-secs    (.as (:duration running-time) "seconds")
+        running-secs    (.asSeconds (:duration running-time))
         rate            (/ bytes-received running-secs)
         decoding-time   (time-diff (:decoding-started-at file)
                           (:decoding-finished-at file))]
@@ -152,16 +194,21 @@
         (dom/span #js {:className "data"}
           (:segments-completed file) "/" (:total-segments file))
         " segments, "
-        (if completed?
+        (condp = (:status file)
+          :completed
           ["completed in "
            (dom/span #js {:className "data"}
              (:human running-time))
            ", decoded in "
            (dom/span #js {:className "data"}
              (:human decoding-time))]
+
+          :working
           ["running for "
            (dom/span #js {:className "data"}
-             (:human running-time))])))))
+             (:human running-time))]
+
+          nil)))))
 
 (defn downloads-section
   [downloads]
@@ -200,8 +247,7 @@
       (apply dom/ul #js {:className "list-unstyled"
                          :id "workers"}
         (om/build-all worker-item workers))
-      (dom/div #js {:className "clearfix"})
-      )))
+      (dom/div #js {:className "clearfix"}))))
 
 (defn leacher-app
   [{:keys [downloads workers] :as app} owner]

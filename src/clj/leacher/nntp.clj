@@ -238,7 +238,8 @@
               :when (not= :completed (:status file))]
         (log/info "resuming" filename)
         (let [result-ch (download file work)]
-          (state/update-file! app-state filename assoc :status :downloading)
+          (state/update-file! app-state filename assoc
+            :status :downloading)
           (>!! out (<!! result-ch)))))
     (catch Exception e
       (log/error e "failed restarting incomplete"))))
@@ -252,8 +253,11 @@
       (log/debug "waiting for work")
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
+          (state/update-file! app-state filename assoc
+            :started-at (System/currentTimeMillis))
           (let [result-ch (download file work)]
-            (state/update-file! app-state filename assoc :status :downloading)
+            (state/update-file! app-state filename assoc
+              :status :downloading)
             (>!! out (<!! result-ch))
             (recur)))
         (log/debug "exiting")))))
@@ -282,5 +286,3 @@
 (defn new-nntp
   [cfg]
   (map->Nntp {:cfg cfg}))
-
-;; public
