@@ -169,7 +169,7 @@
               (update-in [:segments-completed] (fnil inc 0)))))
 
         (-> val
-          (assoc-in [:segment :downloaded-file] result)
+          (assoc-in [:segment :downloaded] result)
           (dissoc :reply)))
 
       (catch Exception e
@@ -178,11 +178,24 @@
           :error  (.getMessage e))
         (log/errorf e "worker[%d]: failed downloading %s" n message-id)))))
 
+(defn try-connect
+  [cfg app-state n]
+  (try
+    (connect (:nntp cfg))
+    (catch Exception e
+      (state/set-worker! app-state n
+        :status :fatal
+        :message (.getMessage e))
+      (log/error e "failed to connect"))))
+
+;; TODO - this needs some work, should re-connect if not able to connect
+;; or if connection is lost. Not catching all possible exceptions here,
+;; thread could die silently right now.
 (defn start-worker
   [cfg app-state {:keys [work]} n]
   (log/debugf "worker[%d]: starting" n)
   (thread
-    (let [conn (connect (:nntp cfg))]
+    (if-let [conn (try-connect cfg app-state n)]
       (with-open [socket ^Socket (:socket conn)]
         (if (authenticated? conn (:nntp cfg))
           (loop []
@@ -205,8 +218,8 @@
           (do
             (log/warnf "worker[%d]: failed to authenticate" n)
             (state/set-worker! app-state n
-              :status :fatal :message "Failed to authenticate")))))
-    (log/debugf "worker[%d] socket closing" n)))
+              :status :fatal :message "Failed to authenticate"))))
+      (log/warn "failed to connect, trying again in a bit"))))
 
 (defn start-workers
   [cfg app-state channels]
@@ -218,27 +231,44 @@
   (let [replies  (chan)
         segments (filter #(not= :completed (:status %))
                    (vals (:segments file)))]
+    ;; put all segments on work queue for concurrent downloading
     (doseq [segment segments]
       (put! work
         {:reply      replies
          :file       file
          :segment    segment}))
+
+    ;; combine all results back onto original file->segment
     (async/reduce (fn [res {:keys [segment]}]
                     (let [{:keys [message-id]} segment]
                       (assoc-in res [:segments message-id] segment)))
       file (async/take (count segments) replies))))
 
+(defn start-download
+  [app-state {:keys [work out]} {:keys [filename] :as file}]
+  (try
+    (state/update-file! app-state filename assoc
+      :started-at (System/currentTimeMillis))
+    (let [result-ch (download file work)]
+      (state/update-file! app-state filename assoc
+        :status :downloading)
+      (>!! out (<!! result-ch)))
+    (catch Exception e
+      (state/update-file! app-state filename assoc
+        :status :failed
+        :error (.getMessage  e))
+      (log/error e "failed downloading"))))
+
 (defn resume-incomplete
-  [app-state {:keys [out work]}]
+  [app-state channels]
   (try
     (when-let [files (state/get-downloads app-state)]
       (doseq [[filename file] files
               :when (not= :completed (:status file))]
         (log/info "resuming" filename)
-        (let [result-ch (download file work)]
-          (state/update-file! app-state filename assoc
-            :status :downloading)
-          (>!! out (<!! result-ch)))))
+        ;; TODO: this will reset the started-at of file, speed will be
+        ;; wrong. problem? meh
+        (start-download app-state channels file)))
     (catch Exception e
       (log/error e "failed restarting incomplete"))))
 
@@ -251,13 +281,8 @@
       (log/debug "waiting for work")
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
-          (state/update-file! app-state filename assoc
-            :started-at (System/currentTimeMillis))
-          (let [result-ch (download file work)]
-            (state/update-file! app-state filename assoc
-              :status :downloading)
-            (>!! out (<!! result-ch))
-            (recur)))
+          (start-download app-state channels file)
+          (recur))
         (log/debug "exiting")))))
 
 (defrecord Nntp [cfg app-state channels]

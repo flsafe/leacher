@@ -23,6 +23,8 @@
     (throw (Exception. "unexpected eof")))
   i)
 
+;; perhaps this is a bit silly, could just readLine the reader and use a
+;; regexp to get the keywords O_o
 (defn read-keywords
   [^BufferedReader  r]
   ;; skip remainder of keyword (eg 'egin' for ybegin)
@@ -58,7 +60,7 @@
 
                  (recur :value res k (str v c)))))))
 
-(defn decode-segment
+(defn decode
   [seg-file]
   (with-open [^BufferedReader r (io/reader seg-file :encoding ENCODING)
               w (java.io.ByteArrayOutputStream.)]
@@ -109,29 +111,31 @@
 
 ;; component
 
+(defn decode-segment
+  [{:keys [segment reply] :as val} n]
+  (try
+    (log/debugf "worker[%d]: got %s" n (:message-id segment))
+    (if-let [segment-file (:downloaded segment)]
+      (let [decoded (decode segment-file)]
+        (>!! reply (-> val
+                     (dissoc :reply)
+                     (assoc-in [:segment :decoded] decoded))))
+      (do
+        (log/warnf "worker[%d]: no downloaded, skipping" n)
+        (>!! reply (dissoc val :reply))))
+    (catch Exception e
+      (log/errorf e "worker[%d]: failed decoding" n)
+      ;; TODO: handle error in some way
+      (>!! reply (dissoc val :reply)))))
+
 (defn start-workers
   [{:keys [decoders]} {:keys [work]} app-state]
   (dotimes [n decoders]
     (thread
       (loop []
-        (if-let [{:keys [segment reply] :as val} (<!! work)]
+        (if-let [val (<!! work)]
           (do
-            (try
-              (log/debugf "worker[%d]: got %s" n (:message-id segment))
-              (if-let [segment-file (:downloaded-file segment)]
-                (let [decoded (decode-segment segment-file)]
-                  (log/debugf "worker[%d]: putting decoded %s on reply chan"
-                    n (:message-id segment))
-                  (>!! reply (-> val
-                               (dissoc :reply)
-                               (assoc-in [:segment :decoded] decoded))))
-                (do
-                  (log/warnf "worker[%d]: no downloaded-file, skipping" n)
-                  (>!! reply (dissoc val :reply))))
-              (catch Exception e
-                (log/errorf e "worker[%d]: failed decoding" n)
-                ;; TODO: handle error in some way
-                (>!! reply (dissoc val :reply))))
+            (decode-segment val n)
             (recur))
           (log/debugf "worker[%d]: exiting" n))))))
 
@@ -139,43 +143,47 @@
   [file work]
   (let [segments (:segments file)
         replies  (chan (count segments))]
+    ;; put all segments onto work queue for decoding concurrently
+    ;; across workers
     (doseq [segment (vals segments)]
       (put! work
             {:reply   replies
              :segment segment}))
+
+    ;; combine the results back onto the original file->segments
     (async/reduce (fn [res {:keys [segment]}]
                     (assoc-in res [:segments (:message-id segment)] segment))
                   file (async/take (count segments) replies))))
 
-(defn combine-file
-  [cfg {:keys [filename] :as file}]
-  (log/debug "combining" filename)
-  (let [combined-file (io/file (-> cfg :dirs :temp) filename)]
-    (io/make-parents combined-file)
-    (write-to file combined-file)
-    combined-file))
+(defn process-file
+  [cfg app-state {:keys [out work]} {:keys [filename] :as file}]
+  (try
+    (log/debug "got file" filename)
+    (state/update-file! app-state filename assoc
+      :status :decoding
+      :decoding-started-at (System/currentTimeMillis))
+
+    (let [file     (<!! (decode-file file work))
+          combined (io/file (-> cfg :dirs :temp) filename)]
+      (io/make-parents combined)
+      (write-to file combined)
+
+      (state/update-file! app-state filename assoc
+        :decoding-finished-at (System/currentTimeMillis))
+
+      (>!! out
+        (assoc file :combined combined)))
+    (catch Exception e
+      (log/error e "failed decoding" filename)
+      (>!! out file))))
 
 (defn start-listening
-  [cfg {:keys [in work out]} app-state]
+  [cfg {:keys [in] :as channels} app-state]
   (thread
     (loop []
-      (if-let [{:keys [filename] :as file} (<!! in)]
+      (if-let [file (<!! in)]
         (do
-          (try
-            (log/debug "got file" filename)
-            (state/update-file! app-state filename assoc
-              :status :decoding
-              :decoding-started-at (System/currentTimeMillis))
-            (let [file          (<!! (decode-file file work))
-                  combined-file (combine-file cfg file)]
-              (state/update-file! app-state filename assoc
-                :decoding-finished-at (System/currentTimeMillis))
-              (log/debug "putting" filename "on out")
-              (>!! out
-                (assoc file :combined-file combined-file)))
-            (catch Exception e
-              (log/error e "failed decoding" filename)
-              (>!! out file)))
+          (process-file cfg app-state channels file)
           (recur))
         (log/debug "exiting")))))
 

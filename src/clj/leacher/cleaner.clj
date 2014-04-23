@@ -7,7 +7,7 @@
 
 (defn move-combined
   [cfg file]
-  (let [combined (:combined-file file)
+  (let [combined (:combined file)
         complete (fs/file (-> cfg :dirs :complete)
                    (fs/base-name combined))]
     (log/debug "moving" (str combined) "to" (str complete))
@@ -16,7 +16,7 @@
 (defn clean-segments
   [file]
   (doseq [segment (-> file :segments vals)
-          :let [f (:downloaded-file segment)]]
+          :let [f (:downloaded segment)]]
     (when f
       (log/debug "cleaner deleting" (str f))
       (fs/delete f))))

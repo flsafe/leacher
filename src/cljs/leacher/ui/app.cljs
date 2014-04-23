@@ -101,11 +101,11 @@
 ;; page elements
 
 (def status->cls
-  {:downloading :warning
-   :completed   :success
-   :error       :danger
-   :decoding    :primary
-   :cleaning    :info})
+  {:downloading       :warning
+   :completed         :success
+   :error             :danger
+   :decoding          :primary
+   :cleaning          :info})
 
 (def music-ext   #{"mp3" "m4p" "flac" "ogg"})
 (def video-ext   #{"avi" "mp4" "mpg" "mkv"})

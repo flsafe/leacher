@@ -1,5 +1,5 @@
 (ns leacher.nzb
-  (:require [clojure.core.async :as async :refer [>!! alt!! chan
+  (:require [clojure.core.async :as async :refer [<!! >!! alt!! chan
                                                   thread]]
             [clojure.data.zip.xml :as zip-xml]
             [clojure.java.io :as io]
@@ -84,32 +84,30 @@
   [{:keys [in out]} app-state]
   (thread
     (loop []
-      (alt!!
-        in
-        ([f]
-           (if f
-             (do
-               (try
-                 (let [files (parse f)]
-                   ;; TODO: check if download already exists
-                   (doseq [[filename file] files]
-                     (state/set-file! app-state filename
-                       (assoc file :status :waiting)))
-                   (doseq [[filename file] files]
-                     (log/info "putting" filename "on out chan")
-                     (>!! out file)
-                     (fs/delete f)))
-                 (catch Exception e
-                   (log/error e "failed to parser nzb file:" (str f))))
-               (recur))
+      (if-let [f (<!! in)]
+        (do
+          (try
+            (let [files (parse f)]
+              ;; TODO: check if download already exists
+              (doseq [[filename file] files]
+                (state/set-file! app-state filename
+                  (assoc file :status :waiting)))
+              (doseq [[filename file] files]
+                (log/info "putting" filename "on out chan")
+                (>!! out file)
+                (fs/delete f)))
+            (catch Exception e
+              (log/error e "failed to parser nzb file:" (str f))))
+          (recur))
 
-             (log/info "exiting")))))))
+        (log/info "exiting")))))
 
 (defrecord NzbParser [channels app-state]
   component/Lifecycle
   (start [this]
     (if-not channels
-      (let [channels {:in (chan) :out (chan)}]
+      (let [channels {:in  (chan)
+                      :out (chan)}]
         (start-listening channels app-state)
         (assoc this :channels channels))
       this))

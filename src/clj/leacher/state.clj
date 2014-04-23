@@ -82,7 +82,10 @@
 
 (defn set-state!
   [app-state f & args]
-  (apply swap! (:state app-state) f args))
+  (try
+    (apply swap! (:state app-state) f args)
+    (catch Exception e
+      (log/error e "failed to set state"))))
 
 (defn set-worker!
   [app-state n & {:as data}]
