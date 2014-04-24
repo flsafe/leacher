@@ -2,8 +2,17 @@ body {
     margin: 20px;
 }
 
+#connection-status {
+    text-transform: uppercase;
+    font-weight: bold;
+}
+
+#connection-status.connected    { color: #5cb85c; }
+#connection-status.error        { color: #d9534f; }
+#connection-status.disconnected { color: gray; }
+
 ul#workers {
-    clear: both;
+
 }
 
 ul#key li {
@@ -15,6 +24,7 @@ ul#workers li {
     float: left;
     width: 15px;
     height: 15px;
+    -webkit-border-radius: 7px;
     margin: 0 1px 1px 0;
 }
 
@@ -24,37 +34,35 @@ ul#workers li {
 .pinging     { background: #428bca; }
 
 #downloads {
-
+    font-size: small;
 }
 
-ul#downloads li {
-    padding:  5px 0 10px 0;
-    margin: 0;
+#downloads li {
     border-bottom: 1px solid #ccc;
-    position: relative;
+    padding: 5px 0;
 }
 
-#downloads h4 {
-    text-transform: uppercase;
-    margin-bottom: 5px;
+#downloads .icon {
+    font-size: 2em;
+    margin-right: 5px;
 }
 
-#downloads h4 .glyphicon { margin-right: 5px; }
+#downloads .filename {
+    color: #333;
+    font-weight: bold;
+}
 
-#downloads p {
-    font-family: Georgia;
-    margin: 0;
-    padding: 0;
+#downloads .bytes, #downloads .rate, #downloads .timing {
     color: #666;
     font-style: italic;
 }
 
-#downloads p span.data {
-    font-family: Helvetica, sans-serif;
-    font-style: normal;
-    color: #369;
+#downloads .status {
+
 }
 
-#downloads .status {
-    float: right;
+#downloads .progress {
+    font-size: x-small;
+    font-weight: bold;
+    width: 100px;
 }

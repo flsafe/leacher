@@ -1,7 +1,5 @@
 (ns leacher.ui.ws
-  (:require [clojure.core.async :as async :refer [<!! chan
-                                                  sliding-buffer
-                                                  thread]]
+  (:require [clojure.core.async :as async :refer [<!! chan thread]]
             [clojure.data :as data]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
@@ -79,7 +77,7 @@
     (if stop-server-fn
       this
       (let [clients        (atom #{})
-            ch             (chan (sliding-buffer 10))
+            ch             (chan)
             stop-server-fn (run-server (partial ws-handler clients app-state) cfg)]
         (log/info "starting")
         (start-publisher clients ch)

@@ -165,7 +165,7 @@
         (state/update-file! app-state filename
           (fn [f]
             (-> f
-              (update-in [:bytes-received] (fnil + 0) (count (:bytes resp)))
+              (update-in [:bytes-received] (fnil + 0) (:bytes segment))
               (update-in [:segments-completed] (fnil inc 0)))))
 
         (-> val

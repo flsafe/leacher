@@ -1,0 +1,3 @@
+* TODO clear completed downloads
+* TODO priority of downloads, move up and down in ui
+  - probably need to use a loop and alt!! thing that tries to push from state onto chan rather than just blocking on adding all then enable ui to re-order and send message

@@ -49,14 +49,12 @@
 
 (defn apply-deltas
   [m deltas]
-  ;; (.time js/console "apply-deltas")
   (let [rm (:remove deltas)
         md (:modify deltas)
         res (apply-removals m rm)
         res (if md
               (deep-merge res md)
               res)]
-    ;; (.timeEnd js/console "apply-deltas")
     res))
 
 (defn ws-chan
@@ -64,16 +62,17 @@
   (let [c   (chan)
         ws  (doto (goog.net.WebSocket.)
               (goog.events.listen Events/OPENED
-                (fn [e] (put! c {:type :opened :event e})))
+                (fn [e]
+                  (put! c {:type :opened :event e})))
               (goog.events.listen Events/CLOSED
-                (fn [e] ))
+                (fn [e]
+                  (put! c {:type :closed :event e})))
               (goog.events.listen Events/ERROR
-                (fn [e] (put! c {:type :error :event e})))
+                (fn [e]
+                  (put! c {:type :error :event e})))
               (goog.events.listen Events/MESSAGE
                 (fn [e]
-                  ;; (.time js/console "read-string")
                   (let [data (cljs.reader/read-string (.-message e))]
-                    ;; (.timeEnd js/console "read-string")
                     (put! c {:type :message :event e :data data})))))]
     (.open ws (str "ws://localhost:" (-> @config :ws-server :port) "/ws"))
     c))
@@ -82,13 +81,25 @@
 
 (defmethod handle-message :initial
   [{:keys [data]}]
-  (reset! app-state data))
+  (swap! app-state merge data))
 
 (defmethod handle-message :deltas
   [{:keys [data]}]
   (swap! app-state apply-deltas data))
 
 (defmulti handle-event :type)
+
+(defmethod handle-event :opened
+  [_]
+  (swap! app-state assoc :websocket :connected))
+
+(defmethod handle-event :closed
+  [_]
+  (swap! app-state assoc :websocket :disconnected))
+
+(defmethod handle-event :error
+  [_]
+  (swap! app-state assoc :websocket :error))
 
 (defmethod handle-event :default
   [{:keys [type]}]
@@ -113,7 +124,7 @@
 
 (defn file->glyphicon
   [filename]
-  (let [[_  ext] (re-find  #"\.(.+)$" filename)]
+  (let [ext (last (string/split filename #"\."))]
     (condp contains? ext
       music-ext   "headphones"
       video-ext   "film"
@@ -124,12 +135,12 @@
   [b]
   (when b
     (cond
-      (< b 1024)     (str (.toFixed b 0) "b")
-      (< b 1048576)  (str (.toFixed (/ b 1024) 0) "kb")
-      (< b 1.074e+9) (str (.toFixed (/ b 1024 1024) 2) "mb")
-      (< b 1.1e+12)  (str (.toFixed (/ b 1024 1024 1024) 2) "gb")
+      (< b 1024)     (str (.toFixed b 0) " B")
+      (< b 1048576)  (str (.toFixed (/ b 1024) 0) " KB")
+      (< b 1.074e+9) (str (.toFixed (/ b 1024 1024) 2) " MB")
+      (< b 1.1e+12)  (str (.toFixed (/ b 1024 1024 1024) 2) " GB")
       :else
-      ">1tb")))
+      ">1 TB")))
 
 (defn label
   [cls text & {:as attrs}]
@@ -161,54 +172,83 @@
 
 (defn download-item
   [[filename file] owner]
-  (let [completed?      (= :completed (:status file))
-        running-time    (time-diff (:started-at file) (:finished-at file))
-        bytes-received  (:bytes-received file)
-        total-bytes     (:total-bytes file)
-        running-secs    (.asSeconds (:duration running-time))
-        rate            (/ bytes-received running-secs)
-        decoding-time   (time-diff (:decoding-started-at file)
-                          (:decoding-finished-at file))]
+  (let [completed?       (= :completed (:status file))
+        running-time     (time-diff (:started-at file) (:finished-at file))
+        bytes-received   (:bytes-received file)
+        total-bytes      (:total-bytes file)
+        running-secs     (.asSeconds (:duration running-time))
+        rate             (/ bytes-received running-secs)
+        decoding-time    (time-diff (:decoding-started-at file)
+                           (:decoding-finished-at file))
+        percent-complete (int (* 100 (/ bytes-received total-bytes)))]
     (dom/li nil
-      (dom/h4 nil
+      (dom/div #js {:className "icon pull-left"}
         (when-let [s (file->glyphicon filename)]
-          (dom/span #js {:className (str "glyphicon glyphicon-" s)}))
-        filename " "
-        (dom/span #js {:className "small"}
-          (->bytes-display bytes-received) "/"
-          (->bytes-display total-bytes)
-          " @ "
-          (->bytes-display rate) "/s"))
-      (dom/div #js {:className "status"}
-        (label (get status->cls (:status file) :default)
-          (-> file :status name)))
-      (dom/p nil
-        "in "
-        (dom/span #js {:className "data"}
-          (string/join ", " (:groups file)))
-        ", posted by "
-        (dom/span #js {:className "data"}
-          (:poster file)))
-      (apply dom/p nil
-        " with "
-        (dom/span #js {:className "data"}
-          (:segments-completed file) "/" (:total-segments file))
-        " segments, "
-        (condp = (:status file)
-          :completed
-          ["completed in "
-           (dom/span #js {:className "data"}
-             (:human running-time))
-           ", decoded in "
-           (dom/span #js {:className "data"}
-             (:human decoding-time))]
+          (dom/span #js {:className (str "glyphicon glyphicon-" s)})))
+      (dom/div #js {:className "pull-left"}
+        (dom/span #js {:className "filename"}
+          filename)
+        (dom/div nil
+          (dom/span #js {:className "bytes"}
+            (->bytes-display bytes-received) " of "
+            (->bytes-display total-bytes))
+          " - "
+          (dom/span #js {:className "rate"}
+            (->bytes-display rate) "/sec")
+          (when completed?
+            (dom/span #js {:className "timing"}
+              ", downloaded in "
+              (dom/span #js {:className "data"}
+                (:human running-time))
+              ", decoded in "
+              (dom/span #js {:className "data"}
+                (:human decoding-time))))))
 
-          :working
-          ["running for "
-           (dom/span #js {:className "data"}
-             (:human running-time))]
+      (when-not completed?
+        (dom/div #js {:className "progress pull-right"}
+          (dom/div #js {:className "progress-bar"
+                        :style     #js {:width (str percent-complete "%")}}
+            (str percent-complete "%"))))
 
-          nil)))))
+      (when completed?
+        (dom/div #js {:className "status pull-right"}
+          (label (get status->cls (:status file) :default)
+            (-> file :status name))))
+
+      (dom/div #js {:className "clearfix"})
+
+
+      ))
+  )
+
+      ;; (dom/p nil
+      ;;   "in "
+      ;;   (dom/span #js {:className "data"}
+      ;;     (string/join ", " (:groups file)))
+      ;;   ", posted by "
+      ;;   (dom/span #js {:className "data"}
+      ;;     (:poster file)))
+      ;; (apply dom/p nil
+      ;;   " with "
+      ;;   (dom/span #js {:className "data"}
+      ;;     (:segments-completed file) "/" (:total-segments file))
+      ;;   " segments, "
+      ;;   (condp = (:status file)
+      ;;     :completed
+      ;;     ["completed in "
+      ;;      (dom/span #js {:className "data"}
+      ;;        (:human running-time))
+      ;;      ", decoded in "
+      ;;      (dom/span #js {:className "data"}
+      ;;        (:human decoding-time))]
+
+      ;;     :working
+      ;;     ["running for "
+      ;;      (dom/span #js {:className "data"}
+      ;;        (:human running-time))]
+
+      ;;     nil))
+
 
 (defn downloads-section
   [downloads]
@@ -219,7 +259,8 @@
           "All your illegal files"))
       (if (zero? (count downloads))
         (dom/p nil "No downloads? You're not trying hard enough")
-        (apply dom/ul #js {:id "downloads" :className "list-unstyled"}
+        (apply dom/ul #js {:id "downloads"
+                           :className "list-unstyled"}
           (om/build-all download-item downloads))))))
 
 (defn worker-item
@@ -228,44 +269,37 @@
 
 (defn workers-section
   [workers]
-  (dom/div #js {:className "row"}
-    (dom/div #js {:className "col-md-12"}
-      (dom/ul #js {:className "list-unstyled"
-                   :id "key"}
-        (dom/li nil
-          (dom/span #js {:className "label waiting"}
-            "Waiting"))
-        (dom/li nil
-          (dom/span #js {:className "label downloading"}
-            "Downloading"))
-        (dom/li nil
-          (dom/span #js {:className "label pinging"}
-            "Pinging"))
-        (dom/li nil
-          (dom/span #js {:className "label fatal"}
-            "Fatal")))
-      (apply dom/ul #js {:className "list-unstyled"
-                         :id "workers"}
-        (om/build-all worker-item workers))
-      (dom/div #js {:className "clearfix"}))))
+  (dom/div #js {:className "col-md-12"}
+    (apply dom/ul #js {:className "list-unstyled pull-left"
+                       :id        "workers"}
+      (om/build-all worker-item workers))
+    (dom/div #js {:className "clearfix"})))
+
+(defn connection-status
+  [status]
+  (dom/div #js {:className "col-md-12"}
+    (dom/div #js {:id        "connection-status"
+                  :className (str "pull-right " (name status))}
+      (name status))))
 
 (defn leacher-app
-  [{:keys [downloads workers] :as app} owner]
+  [{:keys [downloads workers websocket] :as app} owner]
   (reify
     om/IWillMount
     (will-mount [this]
       (let [ws (ws-chan)]
         (go
           (loop []
-            (let [e (<! ws)]
+            (when-let [e (<! ws)]
               (handle-event e)
               (recur))))))
     om/IRender
     (render [this]
-      (dom/div #js {:className "container"}
+      (dom/div #js {:className "container-fluid"}
         (dom/div #js {:className "row"}
-          (workers-section workers)
-          (downloads-section downloads))))))
+          (connection-status websocket)
+          (workers-section workers))
+        (downloads-section downloads)))))
 
 (defn init
   [cfg]
