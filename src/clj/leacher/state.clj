@@ -104,3 +104,13 @@
   [app-state filename message-id f & args]
   (apply set-state! app-state update-in
     [:downloads filename :segments message-id] f args))
+
+(defn clear-completed!
+  [app-state]
+  (set-state! app-state update-in [:downloads]
+    (fn [m]
+      (reduce-kv (fn [res filename file]
+                   (if (= :completed (:status file))
+                     res
+                     (assoc filename file)))
+        {} m))))

@@ -11,6 +11,8 @@ body {
 #connection-status.error        { color: #d9534f; }
 #connection-status.disconnected { color: gray; }
 
+.clear-completed { margin-top: 20px; }
+
 ul#workers {
 
 }

@@ -1,5 +1,5 @@
 (ns leacher.ui.app
-  (:require-macros [cljs.core.async.macros :refer [go]])
+  (:require-macros [cljs.core.async.macros :refer [go go-loop]])
   (:require [goog.events :as events]
             [cljs.core.async :refer [put! <! chan close!]]
             [om.core :as om :include-macros true]
@@ -59,23 +59,28 @@
 
 (defn ws-chan
   []
-  (let [c   (chan)
+  (let [in  (chan)
+        out (chan)
         ws  (doto (goog.net.WebSocket.)
               (goog.events.listen Events/OPENED
                 (fn [e]
-                  (put! c {:type :opened :event e})))
+                  (put! out {:type :opened :event e})))
               (goog.events.listen Events/CLOSED
                 (fn [e]
-                  (put! c {:type :closed :event e})))
+                  (put! out {:type :closed :event e})))
               (goog.events.listen Events/ERROR
                 (fn [e]
-                  (put! c {:type :error :event e})))
+                  (put! out {:type :error :event e})))
               (goog.events.listen Events/MESSAGE
                 (fn [e]
                   (let [data (cljs.reader/read-string (.-message e))]
-                    (put! c {:type :message :event e :data data})))))]
+                    (put! out {:type :message :event e :data data})))))]
+    (go-loop []
+      (when-let [m (<! in)]
+        (.send ws (pr-str m))
+        (recur)))
     (.open ws (str "ws://localhost:" (-> @config :ws-server :port) "/ws"))
-    c))
+    {:in in :out out}))
 
 (defmulti handle-message :type)
 
@@ -215,48 +220,20 @@
           (label (get status->cls (:status file) :default)
             (-> file :status name))))
 
-      (dom/div #js {:className "clearfix"})
-
-
-      ))
-  )
-
-      ;; (dom/p nil
-      ;;   "in "
-      ;;   (dom/span #js {:className "data"}
-      ;;     (string/join ", " (:groups file)))
-      ;;   ", posted by "
-      ;;   (dom/span #js {:className "data"}
-      ;;     (:poster file)))
-      ;; (apply dom/p nil
-      ;;   " with "
-      ;;   (dom/span #js {:className "data"}
-      ;;     (:segments-completed file) "/" (:total-segments file))
-      ;;   " segments, "
-      ;;   (condp = (:status file)
-      ;;     :completed
-      ;;     ["completed in "
-      ;;      (dom/span #js {:className "data"}
-      ;;        (:human running-time))
-      ;;      ", decoded in "
-      ;;      (dom/span #js {:className "data"}
-      ;;        (:human decoding-time))]
-
-      ;;     :working
-      ;;     ["running for "
-      ;;      (dom/span #js {:className "data"}
-      ;;        (:human running-time))]
-
-      ;;     nil))
-
+      (dom/div #js {:className "clearfix"}))))
 
 (defn downloads-section
-  [downloads]
+  [downloads ws-in]
   (dom/div #js {:className "row"}
     (dom/div #js {:className "col-md-12"}
-      (dom/h3 nil "Downloads "
+      (dom/h3 #js {:className "pull-left"}
+        "Downloads "
         (dom/span #js {:className "small"}
           "All your illegal files"))
+      (dom/button #js {:className "btn btn-xs pull-right clear-completed"
+                       :onClick (fn [_] (put! ws-in {:type :clear-completed}))}
+        "Clear completed")
+      (dom/div #js {:className "clearfix"})
       (if (zero? (count downloads))
         (dom/p nil "No downloads? You're not trying hard enough")
         (apply dom/ul #js {:id "downloads"
@@ -285,21 +262,26 @@
 (defn leacher-app
   [{:keys [downloads workers websocket] :as app} owner]
   (reify
+    om/IInitState
+    (init-state [_]
+      {:ws nil})
+
     om/IWillMount
     (will-mount [this]
-      (let [ws (ws-chan)]
-        (go
-          (loop []
-            (when-let [e (<! ws)]
-              (handle-event e)
-              (recur))))))
-    om/IRender
-    (render [this]
+      (let [{:keys [in out] :as ws} (ws-chan)]
+        (om/set-state! owner :ws ws)
+        (go-loop []
+          (when-let [e (<! out)]
+            (handle-event e)
+            (recur)))))
+
+    om/IRenderState
+    (render-state [this {:keys [ws]}]
       (dom/div #js {:className "container-fluid"}
         (dom/div #js {:className "row"}
           (connection-status websocket)
           (workers-section workers))
-        (downloads-section downloads)))))
+        (downloads-section downloads (:in ws))))))
 
 (defn init
   [cfg]

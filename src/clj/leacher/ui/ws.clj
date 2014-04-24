@@ -5,7 +5,7 @@
             [com.stuartsierra.component :as component]
             [leacher.state :as state]
             [org.httpkit.server :refer [close on-close run-server send!
-                                        with-channel]]))
+                                        with-channel on-receive]]))
 
 ;; remove segments from state sent to client, not needed and large
 ;; amount of data
@@ -64,6 +64,9 @@
     (log/info "client connected from" (:remote-addr req))
     (swap! clients conj channel)
     (send! channel (state-event (state/state app-state)))
+    (on-receive channel
+      (fn [data]
+        (state/clear-completed! app-state)))
     (on-close channel
       (fn [status]
         (log/info "client from" (:remote-addr req) "disconnected")
