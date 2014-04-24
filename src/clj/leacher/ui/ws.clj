@@ -14,13 +14,10 @@
   (reduce-kv #(assoc %1 %2 (dissoc %3 :segments)) {} files))
 
 (defn paths-from
-  "Turns a map into a vector of paths to all the keys contained within
-  the map. Used to delete keys from state held by client on a delta
-  update."
   [m]
   (reduce-kv (fn [res k v]
                (if (map? v)
-                 (conj res (into [k] (paths-from v)))
+                 (conj res [k (paths-from v)])
                  (conj res k))) [] m))
 
 (defn deltas-between

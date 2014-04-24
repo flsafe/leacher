@@ -40,11 +40,11 @@
   [m deltas]
   (reduce (fn [res korks]
             (if (vector? korks)
-              (let [[f & r] korks
-                    val     (apply-removals (get res f) (vec r))]
+              (let [[k attrs] korks
+                    val     (apply-removals (get res k) attrs)]
                 (if (empty? val)
-                  (dissoc res f)
-                  (assoc res f val)))
+                  (dissoc res k)
+                  (assoc res k val)))
               (dissoc res korks))) m deltas))
 
 (defn apply-deltas
@@ -209,17 +209,14 @@
               (dom/span #js {:className "data"}
                 (:human decoding-time))))))
 
-      (when-not completed?
-        (dom/div #js {:className "progress pull-right"}
+      (dom/div #js {:className "status pull-right"}
+        (label (get status->cls (:status file) :default)
+          (-> file :status name)))
+
+      (when (= :downloading (:status file))
+        (dom/div #js {:className "progress"}
           (dom/div #js {:className "progress-bar"
-                        :style     #js {:width (str percent-complete "%")}}
-            (str percent-complete "%"))))
-
-      (when completed?
-        (dom/div #js {:className "status pull-right"}
-          (label (get status->cls (:status file) :default)
-            (-> file :status name))))
-
+                        :style     #js {:width (str percent-complete "%")}})))
       (dom/div #js {:className "clearfix"}))))
 
 (defn downloads-section

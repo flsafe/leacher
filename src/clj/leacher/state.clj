@@ -112,5 +112,5 @@
       (reduce-kv (fn [res filename file]
                    (if (= :completed (:status file))
                      res
-                     (assoc filename file)))
+                     (assoc res filename file)))
         {} m))))
