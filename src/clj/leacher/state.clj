@@ -32,7 +32,8 @@
   (try
     (let [file (io/file (:path cfg))]
       (io/make-parents file)
-      (spit file (pr-str @state)))
+      ;; we don't care about persisting worker status
+      (spit file (pr-str (dissoc @state :workers))))
     (catch Exception e
       (log/error e "error while writing state"))))
 
