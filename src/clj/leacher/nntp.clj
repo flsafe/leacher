@@ -226,11 +226,25 @@
   (dotimes [n (-> cfg :nntp :max-connections)]
     (start-worker cfg app-state channels n)))
 
+(defn reload-completed
+  [cfg file]
+  (let [segments (reduce-kv (fn [res message-id {:keys [status] :as segment}]
+                              (if (= :completed status)
+                                (let [result (fs/file (-> cfg :dirs :temp) message-id)]
+                                  (log/info "reloading" message-id)
+                                  (assoc res message-id
+                                         (assoc segment :downloaded result)))
+                                (assoc res message-id segment)))
+                   {} (:segments file))]
+    (assoc file :segments segments)))
+
 (defn download
-  [file work]
+  [cfg file work]
   (let [replies  (chan)
+        file     (reload-completed cfg file)
         segments (filter #(not= :completed (:status %))
                    (vals (:segments file)))]
+
     ;; put all segments on work queue for concurrent downloading
     (doseq [segment segments]
       (put! work
@@ -245,11 +259,11 @@
       file (async/take (count segments) replies))))
 
 (defn start-download
-  [app-state {:keys [work out]} {:keys [filename] :as file}]
+  [cfg app-state {:keys [work out]} {:keys [filename] :as file}]
   (try
     (state/update-file! app-state filename assoc
       :started-at (System/currentTimeMillis))
-    (let [result-ch (download file work)]
+    (let [result-ch (download cfg file work)]
       (state/update-file! app-state filename assoc
         :status :downloading)
       (>!! out (<!! result-ch)))
@@ -260,7 +274,7 @@
       (log/error e "failed downloading"))))
 
 (defn resume-incomplete
-  [app-state channels]
+  [cfg app-state channels]
   (try
     (when-let [files (state/get-downloads app-state)]
       (doseq [[filename file] files
@@ -268,20 +282,20 @@
         (log/info "resuming" filename)
         ;; TODO: this will reset the started-at of file, speed will be
         ;; wrong. problem? meh
-        (start-download app-state channels file)))
+        (start-download cfg app-state channels file)))
     (catch Exception e
       (log/error e "failed restarting incomplete"))))
 
 ;; could start n listening to have more than one nzb file on the go at once?
 (defn start-listening
-  [app-state {:keys [in out work] :as channels}]
+  [cfg app-state {:keys [in out work] :as channels}]
   (thread
-    (resume-incomplete app-state channels)
+    (resume-incomplete cfg app-state channels)
     (loop []
       (log/debug "waiting for work")
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
-          (start-download app-state channels file)
+          (start-download cfg app-state channels file)
           (recur))
         (log/debug "exiting")))))
 
@@ -294,7 +308,7 @@
                       :out  (chan)
                       :work (chan)}]
         (log/info "starting")
-        (start-listening app-state channels)
+        (start-listening cfg app-state channels)
         (start-workers cfg app-state channels)
         (assoc this :channels channels))))
   (stop [this]
