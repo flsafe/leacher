@@ -132,15 +132,6 @@
 
 ;; component
 
-(defn authenticated?
-  [conn {:keys [user password]}]
-  (try
-    (authenticate conn user password)
-    true
-    (catch Exception e
-      (log/error e "failed to authenticate" (ex-data e))
-      false)))
-
 (defn download-to-file
   [cfg app-state conn n {:keys [file segment] :as val}]
   (let [filename   (:filename file)
@@ -188,38 +179,26 @@
         :message (.getMessage e))
       (log/error e "failed to connect"))))
 
-;; TODO - this needs some work, should re-connect if not able to connect
-;; or if connection is lost. Not catching all possible exceptions here,
-;; thread could die silently right now.
 (defn start-worker
   [cfg app-state {:keys [work]} n]
   (log/debugf "worker[%d]: starting" n)
   (thread
-    (if-let [conn (try-connect cfg app-state n)]
-      (with-open [socket ^Socket (:socket conn)]
-        (if (authenticated? conn (:nntp cfg))
-          (loop []
-            (state/set-worker! app-state n :status :waiting)
-            (alt!!
-              work
-              ([{:keys [reply] :as val}]
-                 (when val
-                   (let [result (download-to-file cfg app-state conn n val)]
-                     (log/debugf "worker[%d]: replying" n)
-                     (>!! reply result)
-                     (recur))))
-
-              (async/timeout (* 30 1000))
-              ([_]
-                 ;; keep connection to server alive
-                 (state/set-worker! app-state n :status :pinging)
-                 (ping conn)
-                 (recur))))
-          (do
-            (log/warnf "worker[%d]: failed to authenticate" n)
-            (state/set-worker! app-state n
-              :status :fatal :message "Failed to authenticate"))))
-      (log/warn "failed to connect, trying again in a bit"))))
+    (loop []
+      (state/set-worker! app-state n :status :waiting)
+      (if-let [{:keys [reply] :as val} (<!! work)]
+        (do
+          (try
+            (when-let [conn (try-connect cfg app-state n)]
+              (with-open [sock ^Socket (:socket conn)]
+                (authenticate conn (-> cfg :nntp :user) (-> cfg :nntp :password))
+                (let [result (download-to-file cfg app-state conn n val)]
+                  (log/debugf "worker[%d]: replying" n)
+                  (>!! reply result))))
+            (catch Exception e
+              (log/errorf e "worker[%d]: failed" n)
+              (state/set-worker! app-state n
+                :status :fatal :message (.getMessage e)))))))
+          (recur)))
 
 (defn start-workers
   [cfg app-state channels]

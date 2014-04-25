@@ -239,7 +239,8 @@
 
 (defn worker-item
   [[_ w] owner]
-  (dom/li #js {:className (-> w :status name)}))
+  (dom/li #js {:className (-> w :status name)
+               :title     (:message w)}))
 
 (defn workers-section
   [workers]
