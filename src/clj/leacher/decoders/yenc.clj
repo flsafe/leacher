@@ -169,6 +169,7 @@
       (write-to file combined)
 
       (state/update-file! app-state filename assoc
+        :status :waiting
         :decoding-finished-at (System/currentTimeMillis))
 
       (>!! out

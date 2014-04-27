@@ -25,6 +25,7 @@
   [cfg app-state {:keys [filename] :as file}]
   (try
     (state/update-file! app-state filename assoc
+      :cleaning-started-at (System/currentTimeMillis)
       :status :cleaning)
 
     (clean-segments file)
@@ -32,7 +33,7 @@
 
     (state/update-file! app-state filename assoc
       :status :completed
-      :finished-at (System/currentTimeMillis))
+      :cleaning-finished-at (System/currentTimeMillis))
 
     (catch Exception e
       (log/error e "failed cleaning")

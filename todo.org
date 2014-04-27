@@ -1,3 +1,21 @@
-* TODO clear completed downloads
+* DONE clear completed downloads
 * TODO priority of downloads, move up and down in ui
-  - probably need to use a loop and alt!! thing that tries to push from state onto chan rather than just blocking on adding all then enable ui to re-order and send message
+  - probably need to use a loop and alt!! thing that tries to push from state onto chan rather than just blocking on adding all then enable ui to re-order and send messa
+* TODO more than one file download concurrent
+  - currently more than one segment, but limited to single file
+* TODO add nzb via web interface
+  - drag and drop, or just file open dialogue? seems weird to upload file to local server though...
+* TODO cancel download via ui
+* TODO pause download via ui
+* TODO automatically run par2 on downloads to verify
+* TODO automatically extract rar archives?
+* TODO cleanup should delete rar files and par files when completed successfully?
+* TODO visualize traffic speed over time with rolling timeseries?
+* TODO separate tab in ui for completed downloads perhaps (indicate number in tab)
+  - tabs for All | Active | Paused | Completed ?
+* TODO fix issue with speed timing where decoding time is used as part of calculation
+  - need some more timing information
+  - waiting -> downloading    -> decoding     -> cleaning     -> completed
+               downloading-at    decoding-at     cleaning-at     completed-at
+               |-- download ----|-- decoding --|-- cleaning ----|
+               |----------------- total time -------------------|

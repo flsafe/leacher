@@ -241,15 +241,18 @@
   [cfg app-state {:keys [work out]} {:keys [filename] :as file}]
   (try
     (state/update-file! app-state filename assoc
-      :started-at (System/currentTimeMillis))
-    (let [result-ch (download cfg file work)]
+      :downloading-started-at (System/currentTimeMillis)
+      :status :downloading)
+    (let [result-ch (download cfg file work)
+          result    (<!! result-ch)]
       (state/update-file! app-state filename assoc
-        :status :downloading)
-      (>!! out (<!! result-ch)))
+        :downloading-finished-at (System/currentTimeMillis)
+        :status :waiting)
+      (>!! out result))
     (catch Exception e
       (state/update-file! app-state filename assoc
         :status :failed
-        :error (.getMessage  e))
+        :error (.getMessage e))
       (log/error e "failed downloading"))))
 
 (defn resume-incomplete

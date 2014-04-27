@@ -120,6 +120,7 @@
   {:downloading       :warning
    :completed         :success
    :error             :danger
+   :failed            :danger
    :decoding          :primary
    :cleaning          :info})
 
@@ -149,7 +150,8 @@
 
 (defn label
   [cls text & {:as attrs}]
-  (dom/span #js {:className (str "label label-" (name cls))}
+  (dom/span (clj->js (merge {:className (str "label label-" (name cls))}
+                       attrs))
     text))
 
 (defn badge
@@ -157,14 +159,16 @@
   (dom/span #js {:className "badge"}
     text))
 
+(defn or-now
+  [t]
+  (if t
+    (.moment js/window t)
+    (js/moment)))
+
 (defn time-diff
   [from to]
-  (let [start    (if from
-                   (.moment js/window from)
-                   (js/moment))
-        finish   (if to
-                   (.moment js/window to)
-                   (js/moment))
+  (let [start    (or-now from)
+        finish   (or-now to)
         duration (.duration js/moment (.subtract finish start))
         seconds  (.asSeconds duration)
         human    (if (< seconds 60)
@@ -172,17 +176,20 @@
                    (.humanize duration))]
     {:start    start
      :finish   finish
+     :seconds  seconds
      :duration duration
      :human    human}))
 
 (defn download-item
   [[filename file] owner]
   (let [completed?       (= :completed (:status file))
-        running-time     (time-diff (:started-at file) (:finished-at file))
+        downloading-time (time-diff (:downloading-started-at file)
+                           (:downloading-finished-at file))
+        total-time       (time-diff (:downloading-started-at file)
+                           (:cleaning-finished-at file))
         bytes-received   (:bytes-received file)
         total-bytes      (:total-bytes file)
-        running-secs     (.asSeconds (:duration running-time))
-        rate             (/ bytes-received running-secs)
+        rate             (/ bytes-received (:seconds downloading-time))
         decoding-time    (time-diff (:decoding-started-at file)
                            (:decoding-finished-at file))
         percent-complete (int (* 100 (/ bytes-received total-bytes)))]
@@ -204,14 +211,15 @@
             (dom/span #js {:className "timing"}
               ", downloaded in "
               (dom/span #js {:className "data"}
-                (:human running-time))
+                (:human downloading-time))
               ", decoded in "
               (dom/span #js {:className "data"}
                 (:human decoding-time))))))
 
       (dom/div #js {:className "status pull-right"}
         (label (get status->cls (:status file) :default)
-          (-> file :status name)))
+          (-> file :status name)
+          :title (:error file)))
 
       (when (= :downloading (:status file))
         (dom/div #js {:className "progress"}
