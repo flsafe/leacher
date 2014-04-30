@@ -192,8 +192,8 @@
   component/Lifecycle
   (start [this]
     (if-not channels
-      (let [channels {:in   (chan)
-                      :out  (chan)
+      (let [channels {:in   (chan 10)
+                      :out  (chan 10)
                       :work (chan)}]
         (log/info "starting")
         (start-workers cfg channels app-state)

@@ -115,3 +115,10 @@
                      res
                      (assoc res filename file)))
         {} m))))
+
+(defn cancel-all!
+  [app-state]
+  (set-state! app-state update-in [:downloads]
+    (fn [m]
+      (reduce-kv #(assoc %1 %2 (assoc %3 :status :cancelled))
+        {} m))))

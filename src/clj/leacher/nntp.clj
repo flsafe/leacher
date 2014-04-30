@@ -238,59 +238,64 @@
       file (async/take (count segments) replies))))
 
 (defn start-download
-  [cfg app-state {:keys [work out]} {:keys [filename] :as file}]
-  (try
-    (state/update-file! app-state filename assoc
-      :downloading-started-at (System/currentTimeMillis)
-      :status :downloading)
-    (let [result-ch (download cfg file work)
-          result    (<!! result-ch)]
+  [cfg app-state {:keys [work out]} {:keys [filename status] :as file}]
+  (if (= :cancelled status)
+    (log/info "skipping cancelled file" filename)
+    (try
       (state/update-file! app-state filename assoc
-        :downloading-finished-at (System/currentTimeMillis)
-        :status :waiting)
-      (>!! out result))
-    (catch Exception e
-      (state/update-file! app-state filename assoc
-        :status :failed
-        :error (.getMessage e))
-      (log/error e "failed downloading"))))
+        :downloading-started-at (System/currentTimeMillis)
+        :status :downloading)
+      (let [result-ch (download cfg file work)
+            result    (<!! result-ch)]
+        (state/update-file! app-state filename assoc
+          :downloading-finished-at (System/currentTimeMillis)
+          :status :waiting)
+        (>!! out result))
+      (catch Exception e
+        (state/update-file! app-state filename assoc
+          :status :failed
+          :error (.getMessage e))
+        (log/error e "failed downloading")))))
 
 (defn resume-incomplete
-  [cfg app-state channels]
+  [cfg app-state {:keys [in]}]
   (try
     (when-let [files (state/get-downloads app-state)]
       (doseq [[filename file] files
               :when (not= :completed (:status file))]
         (log/info "resuming" filename)
-        ;; TODO: this will reset the started-at of file, speed will be
-        ;; wrong. problem? meh
-        (start-download cfg app-state channels file)))
+        (put! in file)))
     (catch Exception e
       (log/error e "failed restarting incomplete"))))
 
-;; could start n listening to have more than one nzb file on the go at once?
 (defn start-listening
-  [cfg app-state {:keys [in out work] :as channels}]
+  [n cfg app-state {:keys [in out work] :as channels}]
   (thread
-    (resume-incomplete cfg app-state channels)
     (loop []
-      (log/debug "waiting for work")
+      (log/debugf "listener[%d]: waiting for work" n)
       (if-let [{:keys [filename] :as file} (<!! in)]
         (do
           (start-download cfg app-state channels file)
           (recur))
-        (log/debug "exiting")))))
+        (log/debugf "listener[%d]: exiting" n)))))
+
+(defn start-listeners
+  [cfg app-state channels]
+  (dotimes [n (-> cfg :nntp :max-file-downloads)]
+    (start-listening n cfg app-state channels))
+  (resume-incomplete cfg app-state channels))
 
 (defrecord Nntp [cfg app-state channels]
   component/Lifecycle
   (start [this]
     (if channels
       this
-      (let [channels {:in   (chan)
-                      :out  (chan)
-                      :work (chan)}]
+      (let [channels {:in     (chan 10)
+                      :out    (chan 10)
+                      :cancel (chan)
+                      :work   (chan)}]
         (log/info "starting")
-        (start-listening cfg app-state channels)
+        (start-listeners cfg app-state channels)
         (start-workers cfg app-state channels)
         (assoc this :channels channels))))
   (stop [this]

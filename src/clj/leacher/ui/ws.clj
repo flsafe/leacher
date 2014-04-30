@@ -1,5 +1,5 @@
 (ns leacher.ui.ws
-  (:require [clojure.core.async :as async :refer [<!! chan thread]]
+  (:require [clojure.core.async :as async :refer [<!! chan thread put!]]
             [clojure.data :as data]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
@@ -41,29 +41,32 @@
            :data (deltas-between old new)}))
 
 (defn on-update
-  [ch key ref old new]
-  (async/put! ch (delta-event old new)))
+  [{:keys [work]} key ref old new]
+  (async/put! work (delta-event old new)))
 
 (defn start-publisher
-  [clients ch]
+  [clients {:keys [work]}]
   (thread
     (loop []
-      (when-let [v (<!! ch)]
+      (when-let [v (<!! work)]
         (doseq [ch @clients]
           (send! ch v))
-        ;; woah there
-        (Thread/sleep 100)
         (recur)))))
 
 (defn ws-handler
-  [clients app-state req]
+  [clients app-state {:keys [cancels]} req]
   (with-channel req channel
     (log/info "client connected from" (:remote-addr req))
     (swap! clients conj channel)
     (send! channel (state-event (state/state app-state)))
     (on-receive channel
       (fn [data]
-        (state/clear-completed! app-state)))
+        (case (:type data)
+          :clear-completed (state/clear-completed! app-state)
+          :cancel-all (do
+                        (state/cancel-all! app-state)
+                        (put! cancels {:type :all})))))
+
     (on-close channel
       (fn [status]
         (log/info "client from" (:remote-addr req) "disconnected")
@@ -71,21 +74,22 @@
 
 ;; component
 
-(defrecord WsApi [cfg app-state clients stop-server-fn events ch]
+(defrecord WsApi [cfg app-state clients stop-server-fn events channels]
   component/Lifecycle
   (start [this]
     (if stop-server-fn
       this
       (let [clients        (atom #{})
-            ch             (chan)
-            stop-server-fn (run-server (partial ws-handler clients app-state) cfg)]
+            channels       {:work    (chan)
+                            :cancels (chan)}
+            stop-server-fn (run-server (partial ws-handler clients app-state channels) cfg)]
         (log/info "starting")
-        (start-publisher clients ch)
-        (state/watch app-state :ws-watch (partial on-update ch))
+        (start-publisher clients channels)
+        (state/watch app-state :ws-watch (partial on-update channels))
         (assoc this
           :stop-server-fn stop-server-fn
           :clients clients
-          :ch ch))))
+          :channels channels))))
 
   (stop [this]
     (if stop-server-fn
@@ -94,10 +98,14 @@
         (state/stop-watching app-state :ws-watch)
         (doseq [c @clients]
           (close c))
-        (async/close! ch)
+        (doseq [ch (vals channels)]
+          (async/close! ch))
         (stop-server-fn)
         (reset! clients (atom #{}))
-        (assoc this :stop-server-fn nil :clients nil :ch nil))
+        (assoc this
+          :stop-server-fn nil
+          :clients nil
+          :channels nil))
       this)))
 
 (defn new-ws-api

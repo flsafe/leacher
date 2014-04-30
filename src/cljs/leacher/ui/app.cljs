@@ -141,12 +141,12 @@
   [b]
   (when b
     (cond
-      (< b 1024)     (str (.toFixed b 0) " B")
-      (< b 1048576)  (str (.toFixed (/ b 1024) 0) " KB")
-      (< b 1.074e+9) (str (.toFixed (/ b 1024 1024) 2) " MB")
-      (< b 1.1e+12)  (str (.toFixed (/ b 1024 1024 1024) 2) " GB")
-      :else
-      ">1 TB")))
+      (= js/Infinity b) "?"
+      (< b 1024)        (str (.toFixed b 0) " B")
+      (< b 1048576)     (str (.toFixed (/ b 1024) 0) " KB")
+      (< b 1.074e+9)    (str (.toFixed (/ b 1024 1024) 2) " MB")
+      (< b 1.1e+12)     (str (.toFixed (/ b 1024 1024 1024) 2) " GB")
+      :else             ">1 TB")))
 
 (defn label
   [cls text & {:as attrs}]
@@ -230,17 +230,21 @@
 (defn downloads-section
   [downloads ws-in]
   (dom/div #js {:className "row"}
-    (dom/div #js {:className "col-md-12"}
+    (dom/div #js {:className "header col-md-12"}
       (dom/h3 #js {:className "pull-left"}
         "Downloads "
         (dom/span #js {:className "small"}
           "All your illegal files"))
-      (dom/button #js {:className "btn btn-xs pull-right clear-completed"
+      (dom/button #js {:className "btn btn-xs pull-right"
                        :onClick (fn [_] (put! ws-in {:type :clear-completed}))}
         "Clear completed")
+      (dom/button #js {:className "btn btn-xs btn-danger pull-right"
+                       :onClick (fn [_] (put! ws-in {:type :cancel-all}))}
+        "Cancel all")
+
       (dom/div #js {:className "clearfix"})
       (if (zero? (count downloads))
-        (dom/p nil "No downloads? You're not trying hard enough")
+        (dom/p nil "No downloads!")
         (apply dom/ul #js {:id "downloads"
                            :className "list-unstyled"}
           (om/build-all download-item downloads))))))

@@ -7,15 +7,12 @@
   - drag and drop, or just file open dialogue? seems weird to upload file to local server though...
 * TODO cancel download via ui
 * TODO pause download via ui
-* TODO automatically run par2 on downloads to verify
-* TODO automatically extract rar archives?
-* TODO cleanup should delete rar files and par files when completed successfully?
 * TODO visualize traffic speed over time with rolling timeseries?
 * TODO separate tab in ui for completed downloads perhaps (indicate number in tab)
   - tabs for All | Active | Paused | Completed ?
-* TODO fix issue with speed timing where decoding time is used as part of calculation
-  - need some more timing information
-  - waiting -> downloading    -> decoding     -> cleaning     -> completed
-               downloading-at    decoding-at     cleaning-at     completed-at
-               |-- download ----|-- decoding --|-- cleaning ----|
-               |----------------- total time -------------------|
+* DONE fix issue with speed timing where decoding time is used as part of calculation
+
+Maybe
+* TODO automatically run par2 on downloads to verify
+* TODO automatically extract rar archives?
+* TODO cleanup should delete rar files and par files when completed successfully?
