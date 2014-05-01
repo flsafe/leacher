@@ -7,6 +7,7 @@
             [com.stuartsierra.component :as component]
             [leacher.state :as state]
             [leacher.utils :refer [parse-long]]
+            [leacher.workers :refer [workers]]
             [me.raynes.fs :as fs])
   (:import (java.io BufferedReader ByteArrayOutputStream Writer)
            (java.net Socket)
@@ -169,41 +170,22 @@
           :error  (.getMessage e))
         (log/errorf e "worker[%d]: failed downloading %s" n message-id)))))
 
-(defn try-connect
-  [cfg app-state n]
-  (try
-    (connect (:nntp cfg))
-    (catch Exception e
-      (state/set-worker! app-state n
-        :status :fatal
-        :message (.getMessage e))
-      (log/error e "failed to connect"))))
-
-(defn start-worker
-  [cfg app-state {:keys [work]} n]
-  (log/debugf "worker[%d]: starting" n)
-  (thread
-    (loop []
-      (state/set-worker! app-state n :status :waiting)
-      (if-let [{:keys [reply] :as val} (<!! work)]
-        (do
-          (try
-            (when-let [conn (try-connect cfg app-state n)]
-              (with-open [sock ^Socket (:socket conn)]
-                (authenticate conn (-> cfg :nntp :user) (-> cfg :nntp :password))
-                (let [result (download-to-file cfg app-state conn n val)]
-                  (log/debugf "worker[%d]: replying" n)
-                  (>!! reply result))))
-            (catch Exception e
-              (log/errorf e "worker[%d]: failed" n)
-              (state/set-worker! app-state n
-                :status :fatal :message (.getMessage e)))))))
-          (recur)))
-
 (defn start-workers
-  [cfg app-state channels]
+  [cfg app-state {:keys [work]}]
   (dotimes [n (-> cfg :nntp :max-connections)]
-    (start-worker cfg app-state channels n)))
+    (state/set-worker! app-state n :status :waiting))
+  (workers (-> cfg :nntp :max-connections) "nntp-worker" work
+    (fn [n {:keys [reply] :as val}]
+      (try
+        (when-let [conn (connect (:nntp cfg))]
+          (with-open [sock ^Socket (:socket conn)]
+            (authenticate conn (-> cfg :nntp :user) (-> cfg :nntp :password))
+            (let [result (download-to-file cfg app-state conn n val)]
+              (log/debugf "worker[%d]: replying" n)
+              (>!! reply result))))
+        (catch Exception e
+          (state/set-worker! app-state n :status :fatal :message (.getMessage e))
+          (throw e))))))
 
 (defn reload-completed
   [cfg file]
@@ -268,21 +250,11 @@
     (catch Exception e
       (log/error e "failed restarting incomplete"))))
 
-(defn start-listening
-  [n cfg app-state {:keys [in out work] :as channels}]
-  (thread
-    (loop []
-      (log/debugf "listener[%d]: waiting for work" n)
-      (if-let [{:keys [filename] :as file} (<!! in)]
-        (do
-          (start-download cfg app-state channels file)
-          (recur))
-        (log/debugf "listener[%d]: exiting" n)))))
-
 (defn start-listeners
-  [cfg app-state channels]
-  (dotimes [n (-> cfg :nntp :max-file-downloads)]
-    (start-listening n cfg app-state channels))
+  [cfg app-state {:keys [in] :as channels}]
+  (workers (-> cfg :nntp :max-file-downloads) "nntp-listener" in
+    (fn [n file]
+      (start-download cfg app-state channels file)))
   (resume-incomplete cfg app-state channels))
 
 (defrecord Nntp [cfg app-state channels]

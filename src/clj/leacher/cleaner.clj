@@ -3,6 +3,7 @@
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
             [leacher.state :as state]
+            [leacher.workers :refer [worker]]
             [me.raynes.fs :as fs]))
 
 (defn move-combined
@@ -44,13 +45,9 @@
 
 (defn start-listening
   [cfg app-state {:keys [in]}]
-  (thread
-    (loop []
-      (if-let [file (<!! in)]
-        (do
-          (clean cfg app-state file)
-          (recur))
-        (log/debug "exiting")))))
+  (worker "cleaner" in
+    (fn [file]
+      (clean cfg app-state file))))
 
 ;; component
 

@@ -5,7 +5,8 @@
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
             [leacher.state :as state]
-            [leacher.utils :refer [parse-long]])
+            [leacher.utils :refer [parse-long]]
+            [leacher.workers :refer [worker workers]])
   (:import (java.io BufferedReader RandomAccessFile)))
 
 (def ENCODING "ISO-8859-1")
@@ -112,7 +113,7 @@
 ;; component
 
 (defn decode-segment
-  [{:keys [segment reply] :as val} n]
+  [n {:keys [segment reply] :as val}]
   (try
     (log/debugf "worker[%d]: got %s" n (:message-id segment))
     (if-let [segment-file (:downloaded segment)]
@@ -130,14 +131,7 @@
 
 (defn start-workers
   [{:keys [decoders]} {:keys [work]} app-state]
-  (dotimes [n decoders]
-    (thread
-      (loop []
-        (if-let [val (<!! work)]
-          (do
-            (decode-segment val n)
-            (recur))
-          (log/debugf "worker[%d]: exiting" n))))))
+  (workers decoders "yenc-worker" work decode-segment))
 
 (defn decode-file
   [file work]
@@ -180,13 +174,9 @@
 
 (defn start-listening
   [cfg {:keys [in] :as channels} app-state]
-  (thread
-    (loop []
-      (if-let [file (<!! in)]
-        (do
-          (process-file cfg app-state channels file)
-          (recur))
-        (log/debug "exiting")))))
+  (worker "yenc-listener" in
+    (fn [file]
+      (process-file cfg app-state channels file))))
 
 (defrecord YencDecoder [cfg channels app-state]
   component/Lifecycle
