@@ -7,9 +7,9 @@
             [me.raynes.fs :as fs]
             [com.stuartsierra.component :as component]
             [leacher.config :as config]
-            [leacher.nntp :as nntp]
+            [leacher.downloader :as downloader]
             [leacher.nzb :as nzb]
-            [leacher.decoders.yenc :as yenc]
+            [leacher.decoder :as decoder]
             [leacher.state :as state]
             [leacher.watcher :as watcher]
             [leacher.conductor :as conductor]
@@ -33,9 +33,9 @@
 
 (def components
   [:app-state
-   :nntp
+   :downloader
    :nzb-parser
-   :yenc-decoder
+   :decoder
    :watcher
    :conductor
    :cleaner
@@ -54,22 +54,22 @@
 (defn new-leacher-system
   [cfg]
   (map->LeacherSystem
-    {:cfg          cfg
-     :app-state    (state/new-app-state (:app-state cfg))
-     :watcher      (watcher/new-watcher (-> cfg :dirs :queue))
-     :nzb-parser   (component/using (nzb/new-nzb-parser)
-                     [:app-state])
-     :nntp         (component/using (nntp/new-nntp cfg)
-                     [:app-state])
-     :yenc-decoder (component/using (yenc/new-decoder cfg)
-                     [:app-state])
-     :cleaner      (component/using (cleaner/new-cleaner cfg)
-                     [:app-state])
-     :conductor    (component/using (conductor/new-conductor cfg)
-                     [:watcher :nzb-parser :nntp :yenc-decoder :cleaner])
-     :http         (http/new-http-server cfg)
-     :ws           (component/using (ws/new-ws-api (:ws-server cfg))
-                     [:app-state])}))
+    {:cfg        cfg
+     :app-state  (state/new-app-state (:app-state cfg))
+     :watcher    (watcher/new-watcher (-> cfg :dirs :queue))
+     :nzb-parser (component/using (nzb/new-nzb-parser)
+                   [:app-state])
+     :downloader (component/using (downloader/new-downloader cfg)
+                   [:app-state])
+     :decoder    (component/using (decoder/new-decoder cfg)
+                   [:app-state])
+     :cleaner    (component/using (cleaner/new-cleaner cfg)
+                   [:app-state])
+     :conductor  (component/using (conductor/new-conductor cfg)
+                   [:watcher :nzb-parser :downloader :decoder :cleaner])
+     :http       (http/new-http-server cfg)
+     :ws         (component/using (ws/new-ws-api (:ws-server cfg))
+                   [:app-state])}))
 
 ;; entry point
 

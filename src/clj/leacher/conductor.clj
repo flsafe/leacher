@@ -9,7 +9,7 @@
 
 ;; component
 
-(defrecord Conductor [cfg nzb-parser watcher nntp yenc-decoder cleaner channels]
+(defrecord Conductor [cfg nzb-parser watcher downloader decoder cleaner channels]
   component/Lifecycle
   (start [this]
     (if-not channels
@@ -17,8 +17,8 @@
         (log/info "starting")
         (let [channels [(:channels watcher)
                         (:channels nzb-parser)
-                        (:channels nntp)
-                        (:channels yenc-decoder)
+                        (:channels downloader)
+                        (:channels decoder)
                         (:channels cleaner)]]
           (doseq [[c1 c2] (partition 2 1 channels)
                   :let [from (:out c1)
