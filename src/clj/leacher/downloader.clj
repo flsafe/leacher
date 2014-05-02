@@ -16,12 +16,9 @@
   (let [filename   (:filename file)
         message-id (:message-id segment)]
     (try
-      (state/set-worker! app-state n
-        :status :downloading
-        :message-id message-id
-        :filename   filename)
-      (state/update-segment! app-state filename message-id assoc
-        :status :downloading)
+      (state/set-worker! app-state n :status :downloading)
+      (state/update-segment! app-state filename message-id
+        assoc :status :downloading)
 
       (nntp/group conn (-> file :groups first))
       (let [resp   (nntp/article conn message-id)
@@ -29,15 +26,14 @@
         (log/debugf "worker[%d]: copying bytes to %s" n (str result))
         (io/copy (:bytes resp) result)
 
-        (state/update-segment! app-state filename message-id assoc
-          :status :downloaded
-          :downloaded (fs/absolute-path result))
-
         (state/update-file! app-state filename
           (fn [f]
             (-> f
               (update-in [:bytes-received] (fnil + 0) (:bytes segment))
-              (update-in [:segments-completed] (fnil inc 0))))))
+              (update-in [:segments-completed] (fnil inc 0))
+              (update-in [:segments message-id] assoc
+                :status :downloaded
+                :downloaded (fs/absolute-path result))))))
 
       (catch Exception e
         (state/update-segment! app-state filename message-id assoc
@@ -45,17 +41,19 @@
           :error  (.getMessage e))
         (log/errorf e "worker[%d]: failed downloading %s" n message-id)))))
 
+;; TODO some kind of retry on failure to connect with a back-off to
+;; re-attempt download.
 (defn start-workers
   [cfg app-state {:keys [work]}]
   (dotimes [n (-> cfg :nntp :max-connections)]
     (state/set-worker! app-state n :status :waiting))
-  (workers (-> cfg :nntp :max-connections) "downloader-worker" work
+  (workers (-> cfg :nntp :max-connections) "worker" work
     (fn [n {:keys [reply filename message-id] :as val}]
       (let [file    (state/get-file app-state filename)
             segment (get (file :segments) message-id)]
         (if (:cancelled segment)
           (do
-            (log/info message-id "cancelled, skipping download")
+            (log/info message-id "cancelled, skipping")
             (>!! reply :cancelled))
           (try
             (when-let [conn (nntp/connect (:nntp cfg))]
@@ -66,7 +64,7 @@
             (catch Exception e
               (state/set-worker! app-state n :status :fatal :message (.getMessage e))
               (>!! reply :failed)
-              (throw e))))))))
+              (log/error e "failed downloading" message-id))))))))
 
 (defn download
   [cfg file work]
@@ -120,7 +118,7 @@
 
 (defn start-listeners
   [cfg app-state {:keys [in] :as channels}]
-  (workers (-> cfg :nntp :max-file-downloads) "downloader-listener" in
+  (workers (-> cfg :nntp :max-file-downloads) "listener" in
     (fn [n filename]
       (let [file (state/get-file app-state filename)]
         (when-not (:cancelled file)

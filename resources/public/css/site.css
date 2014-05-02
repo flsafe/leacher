@@ -33,7 +33,6 @@ ul#workers li {
 .waiting     { background: #999; }
 .downloading { background: #5cb85c; }
 .fatal       { background: #d9534f; }
-.pinging     { background: #428bca; }
 
 #downloads {
     font-size: small;
