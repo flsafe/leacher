@@ -46,8 +46,9 @@
 (defn start-listening
   [cfg app-state {:keys [in]}]
   (worker "cleaner" in
-    (fn [file]
-      (clean cfg app-state file))))
+    (fn [filename]
+      (let [file (state/get-file app-state filename)]
+        (clean cfg app-state file)))))
 
 ;; component
 

@@ -28,7 +28,7 @@
 
 ;; component
 
-(defrecord Watcher [dir channels app-state]
+(defrecord Watcher [dir channels]
   component/Lifecycle
   (start [this]
     (if-not channels

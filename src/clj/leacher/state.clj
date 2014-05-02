@@ -2,21 +2,14 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log]
-            [com.stuartsierra.component :as component])
+            [com.stuartsierra.component :as component]
+            [me.raynes.fs :as fs])
   (:import (java.io PushbackReader)))
 
-(comment
-
-  {:downloads {"a.zip"        {:status :waiting
-                               :segments {"" {}}}
-               "somefile.mp3" {:status :downloading
-                               :segments {"<23b@asdf.com>" {}}}}
-   :workers   [{:status :waiting}
-               {:status     :downloading
-                :file       "somefile.mp3"
-                :message-id "<23b@asdf.com>"}]}
-
-  )
+;; don't try and persist the decoded byte arrays!
+(defmethod print-method (type (byte-array 0))
+  [b ^java.io.Writer w]
+  (.write w "nil"))
 
 (defn read-state
   [cfg]
@@ -56,8 +49,9 @@
       component)))
 
 (defn new-app-state
-  [cfg]
-  (map->AppState {:cfg cfg}))
+  [cfg events]
+  (map->AppState {:cfg    cfg
+                  :events events}))
 
 ;; public
 
@@ -77,10 +71,6 @@
   [app-state & ks]
   (get-in (state app-state) ks))
 
-(defn get-downloads
-  [app-state]
-  (get-state app-state :downloads))
-
 (defn set-state!
   [app-state f & args]
   (try
@@ -88,9 +78,15 @@
     (catch Exception e
       (log/error e "failed to set state"))))
 
-(defn set-worker!
-  [app-state n & {:as data}]
-  (set-state! app-state assoc-in [:workers n] data))
+;; downloads state
+
+(defn get-downloads
+  [app-state]
+  (get-state app-state :downloads))
+
+(defn get-file
+  [app-state filename]
+  (get-state app-state :downloads filename))
 
 (defn set-file!
   [app-state filename file]
@@ -100,6 +96,10 @@
   [app-state filename f & args]
   (apply set-state! app-state update-in
     [:downloads filename] f args))
+
+(defn get-segment
+  [app-state filename message-id]
+  (get-state app-state :downloads filename :segments message-id))
 
 (defn update-segment!
   [app-state filename message-id f & args]
@@ -116,9 +116,39 @@
                      (assoc res filename file)))
         {} m))))
 
+(defn cancel-values
+  [res k v]
+  (assoc res k (assoc v :cancelled true)))
+
+(defn cancel-file
+  [file]
+  (-> file
+    (assoc :cancelled true
+           :segments (reduce-kv cancel-values {} (:segments file)))))
+
 (defn cancel-all!
   [app-state]
   (set-state! app-state update-in [:downloads]
     (fn [m]
-      (reduce-kv #(assoc %1 %2 (assoc %3 :status :cancelled))
-        {} m))))
+      (into {}
+        (for [[filename file] m]
+          [filename (cancel-file file)])))))
+
+;; worker state
+
+(defn set-worker!
+  [app-state n & {:as data}]
+  (set-state! app-state assoc-in [:workers n] data))
+
+(comment
+
+  {:downloads {"a.zip"        {:status :waiting
+                               :segments {"" {}}}
+               "somefile.mp3" {:status :downloading
+                               :segments {"<23b@asdf.com>" {}}}}
+   :workers   [{:status :waiting}
+               {:status     :downloading
+                :file       "somefile.mp3"
+                :message-id "<23b@asdf.com>"}]}
+
+  )

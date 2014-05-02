@@ -6,9 +6,10 @@
             [clojure.core.async :refer [chan]]
             [me.raynes.fs :as fs]
             [com.stuartsierra.component :as component]
+            [leacher.utils :refer [on-shutdown]]
             [leacher.config :as config]
             [leacher.downloader :as downloader]
-            [leacher.nzb :as nzb]
+            [leacher.parser :as parser]
             [leacher.decoder :as decoder]
             [leacher.state :as state]
             [leacher.watcher :as watcher]
@@ -18,23 +19,12 @@
             [leacher.ui.ws :as ws])
   (:gen-class))
 
-;; shutdown hooks
-
-(defn add-shutdown-hook
-  [f]
-  (.addShutdownHook (java.lang.Runtime/getRuntime)
-    (Thread. ^Runnable f)))
-
-(defmacro on-shutdown
-  [& body]
-  `(add-shutdown-hook (fn [] ~@body)))
-
 ;; system
 
 (def components
   [:app-state
    :downloader
-   :nzb-parser
+   :parser
    :decoder
    :watcher
    :conductor
@@ -53,23 +43,24 @@
 
 (defn new-leacher-system
   [cfg]
-  (map->LeacherSystem
-    {:cfg        cfg
-     :app-state  (state/new-app-state (:app-state cfg))
-     :watcher    (watcher/new-watcher (-> cfg :dirs :queue))
-     :nzb-parser (component/using (nzb/new-nzb-parser)
-                   [:app-state])
-     :downloader (component/using (downloader/new-downloader cfg)
-                   [:app-state])
-     :decoder    (component/using (decoder/new-decoder cfg)
-                   [:app-state])
-     :cleaner    (component/using (cleaner/new-cleaner cfg)
-                   [:app-state])
-     :conductor  (component/using (conductor/new-conductor cfg)
-                   [:watcher :nzb-parser :downloader :decoder :cleaner])
-     :http       (http/new-http-server cfg)
-     :ws         (component/using (ws/new-ws-api (:ws-server cfg))
-                   [:app-state])}))
+  (let [events (chan)]
+    (map->LeacherSystem
+      {:cfg        cfg
+       :app-state  (state/new-app-state (:app-state cfg) events)
+       :watcher    (watcher/new-watcher (-> cfg :dirs :queue))
+       :parser     (component/using (parser/new-parser)
+                     [:app-state])
+       :downloader (component/using (downloader/new-downloader cfg)
+                     [:app-state])
+       :decoder    (component/using (decoder/new-decoder cfg)
+                     [:app-state])
+       :cleaner    (component/using (cleaner/new-cleaner cfg)
+                     [:app-state])
+       :conductor  (component/using (conductor/new-conductor cfg)
+                     [:watcher :parser :downloader :decoder :cleaner])
+       :http       (http/new-http-server cfg)
+       :ws         (component/using (ws/new-ws-api (:ws-server cfg))
+                     [:app-state])})))
 
 ;; entry point
 

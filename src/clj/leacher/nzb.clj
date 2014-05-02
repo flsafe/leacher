@@ -1,14 +1,10 @@
 (ns leacher.nzb
-  (:require [clojure.core.async :as async :refer [<!! >!! alt!! chan
-                                                  thread]]
-            [clojure.data.zip.xml :as zip-xml]
+  (:require [clojure.data.zip.xml :as zip-xml]
             [clojure.java.io :as io]
-            [clojure.tools.logging :as log]
             [clojure.xml :as xml]
             [clojure.zip :as zip]
-            [com.stuartsierra.component :as component]
-            [leacher.state :as state]
-            [me.raynes.fs :as fs])
+
+            )
   (:import (clojure.lang XMLHandler)
            (java.io BufferedInputStream)
            (javax.xml.parsers SAXParser SAXParserFactory)))
@@ -77,52 +73,6 @@
       (->> (mapv ->file)
         (mapv (juxt :filename identity))
         (into {}))))
-
-;; component
-
-(defn start-listening
-  [{:keys [in out]} app-state]
-  (thread
-    (loop []
-      (if-let [f (<!! in)]
-        (do
-          (try
-            (let [files (parse f)]
-              ;; TODO: check if download already exists
-              (doseq [[filename file] files]
-                (state/set-file! app-state filename
-                  (assoc file :status :waiting)))
-              (doseq [[filename file] files]
-                (log/info "putting" filename "on out chan")
-                (>!! out file)
-                (fs/delete f)))
-            (catch Exception e
-              (log/error e "failed to parser nzb file:" (str f))))
-          (recur))
-
-        (log/info "exiting")))))
-
-(defrecord NzbParser [channels app-state]
-  component/Lifecycle
-  (start [this]
-    (if-not channels
-      (let [channels {:in  (chan)
-                      :out (chan)}]
-        (start-listening channels app-state)
-        (assoc this :channels channels))
-      this))
-
-  (stop [this]
-    (if channels
-      (do
-        (doseq [[_ ch] channels]
-          (async/close! ch))
-        (assoc this :channels nil))
-      this)))
-
-(defn new-nzb-parser
-  []
-  (map->NzbParser {}))
 
 (comment
   (first (parse "/home/gareth/.leacher/slayer.nzb"))

@@ -9,14 +9,14 @@
 
 ;; component
 
-(defrecord Conductor [cfg nzb-parser watcher downloader decoder cleaner channels]
+(defrecord Conductor [cfg parser watcher downloader decoder cleaner channels]
   component/Lifecycle
   (start [this]
     (if-not channels
       (do
         (log/info "starting")
         (let [channels [(:channels watcher)
-                        (:channels nzb-parser)
+                        (:channels parser)
                         (:channels downloader)
                         (:channels decoder)
                         (:channels cleaner)]]

@@ -1,5 +1,16 @@
 (ns leacher.utils)
 
+;; shutdown hooks
+
+(defn add-shutdown-hook
+  [f]
+  (.addShutdownHook (java.lang.Runtime/getRuntime)
+    (Thread. ^Runnable f)))
+
+(defmacro on-shutdown
+  [& body]
+  `(add-shutdown-hook (fn [] ~@body)))
+
 (defn parse-long
   [^String s]
   (Long/valueOf s))

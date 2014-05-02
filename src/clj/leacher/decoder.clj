@@ -4,6 +4,7 @@
             [clojure.tools.logging :as log]
             [clojure.java.io :as io]
             [com.stuartsierra.component :as component]
+            [me.raynes.fs :as fs]
             [leacher.decoders.yenc :as yenc]
             [leacher.state :as state]
             [leacher.workers :refer [worker workers]])
@@ -23,41 +24,48 @@
         (.write output ^bytes (:bytes decoded))))))
 
 (defn decode-segment
-  [n {:keys [segment reply] :as val}]
-  (try
-    (log/debugf "worker[%d]: got %s" n (:message-id segment))
-    (if-let [segment-file (:downloaded segment)]
-      (let [decoded (yenc/decode segment-file)]
-        (>!! reply (-> val
-                     (dissoc :reply)
-                     (assoc-in [:segment :decoded] decoded))))
+  [app-state n {:keys [filename message-id reply]}]
+  (let [segment (state/get-segment app-state filename message-id)]
+    (if (:cancelled segment)
       (do
-        (log/warnf "worker[%d]: no downloaded, skipping" n)
-        (>!! reply (dissoc val :reply))))
-    (catch Exception e
-      (log/errorf e "worker[%d]: failed decoding" n)
-      ;; TODO: handle error in some way
-      (>!! reply (dissoc val :reply)))))
+        (log/infof "worker[%d]: %s cancelled, skipping" n message-id)
+        (>!! reply :cancelled))
+      (try
+        (log/debugf "worker[%d]: got %s" n message-id)
+        (if-let [segment-file (fs/file (:downloaded segment))]
+          (let [decoded (yenc/decode segment-file)]
+            (state/update-segment! app-state filename message-id assoc
+              :status :decoded
+              :decoded decoded)
+            (>!! reply :completed))
+          (do
+            (log/warnf "worker[%d]: no downloaded, skipping" n)
+            (>!! reply :failed)))
+        (catch Exception e
+          (log/errorf e "worker[%d]: failed decoding" n)
+          (>!! reply :failed))))))
 
 (defn start-workers
   [{:keys [decoders]} {:keys [work]} app-state]
-  (workers decoders "yenc-worker" work decode-segment))
+  (workers decoders "yenc-worker" work (partial decode-segment app-state)))
 
 (defn decode-file
   [file work]
-  (let [segments (:segments file)
-        replies  (chan (count segments))]
-    ;; put all segments onto work queue for decoding concurrently
-    ;; across workers
-    (doseq [segment (vals segments)]
-      (put! work
-            {:reply   replies
-             :segment segment}))
+  (let [message-ids (mapv :message-id (-> file :segments vals))
+        number      (count message-ids)
+        replies     (chan number)]
 
-    ;; combine the results back onto the original file->segments
-    (async/reduce (fn [res {:keys [segment]}]
-                    (assoc-in res [:segments (:message-id segment)] segment))
-                  file (async/take (count segments) replies))))
+    (doseq [message-id message-ids]
+      (put! work
+        {:reply      replies
+         :filename   (:filename file)
+         :message-id message-id}))
+
+    (let [results (<!! (async/reduce conj [] (async/take number replies)))]
+      (cond
+        (every? #(= :completed %) results) :decoded
+        (some #{:cancelled} results)       :cancelled
+        (some #{:failed} results)          :failed))))
 
 (defn process-file
   [cfg app-state {:keys [out work]} {:keys [filename] :as file}]
@@ -67,26 +75,29 @@
       :status :decoding
       :decoding-started-at (System/currentTimeMillis))
 
-    (let [file     (<!! (decode-file file work))
+    (let [result   (decode-file file work)
           combined (io/file (-> cfg :dirs :temp) filename)]
       (io/make-parents combined)
-      (write-to file combined)
+      (let [file (state/get-file app-state filename)]
+        (write-to file combined))
 
       (state/update-file! app-state filename assoc
-        :status :waiting
+        :status result
+        :combined (fs/absolute-path combined)
         :decoding-finished-at (System/currentTimeMillis))
 
-      (>!! out
-        (assoc file :combined combined)))
+      (when (= :decoded result)
+        (>!! out filename)))
     (catch Exception e
-      (log/error e "failed decoding" filename)
-      (>!! out file))))
+      (log/error e "failed decoding" filename))))
 
 (defn start-listening
   [cfg {:keys [in] :as channels} app-state]
   (worker "yenc-listener" in
-    (fn [file]
-      (process-file cfg app-state channels file))))
+    (fn [filename]
+      (let [file (state/get-file app-state filename)]
+        (when-not (:cancelled file)
+          (process-file cfg app-state channels file))))))
 
 (defrecord Decoder [cfg channels app-state]
   component/Lifecycle

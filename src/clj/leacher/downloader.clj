@@ -12,7 +12,7 @@
 ;; component
 
 (defn download-to-file
-  [cfg app-state conn n {:keys [file segment] :as val}]
+  [cfg app-state conn n file segment]
   (let [filename   (:filename file)
         message-id (:message-id segment)]
     (try
@@ -30,17 +30,14 @@
         (io/copy (:bytes resp) result)
 
         (state/update-segment! app-state filename message-id assoc
-          :status :completed)
+          :status :downloaded
+          :downloaded (fs/absolute-path result))
 
         (state/update-file! app-state filename
           (fn [f]
             (-> f
               (update-in [:bytes-received] (fnil + 0) (:bytes segment))
-              (update-in [:segments-completed] (fnil inc 0)))))
-
-        (-> val
-          (assoc-in [:segment :downloaded] result)
-          (dissoc :reply)))
+              (update-in [:segments-completed] (fnil inc 0))))))
 
       (catch Exception e
         (state/update-segment! app-state filename message-id assoc
@@ -53,86 +50,81 @@
   (dotimes [n (-> cfg :nntp :max-connections)]
     (state/set-worker! app-state n :status :waiting))
   (workers (-> cfg :nntp :max-connections) "downloader-worker" work
-    (fn [n {:keys [reply] :as val}]
-      (try
-        (when-let [conn (nntp/connect (:nntp cfg))]
-          (with-open [sock ^Socket (:socket conn)]
-            (nntp/authenticate conn (-> cfg :nntp :user) (-> cfg :nntp :password))
-            (let [result (download-to-file cfg app-state conn n val)]
-              (log/debugf "worker[%d]: replying" n)
-              (>!! reply result))))
-        (catch Exception e
-          (state/set-worker! app-state n :status :fatal :message (.getMessage e))
-          (throw e))))))
-
-(defn reload-completed
-  [cfg file]
-  (let [segments (reduce-kv (fn [res message-id {:keys [status] :as segment}]
-                              (if (= :completed status)
-                                (let [result (fs/file (-> cfg :dirs :temp) message-id)]
-                                  (log/info "reloading" message-id)
-                                  (assoc res message-id
-                                         (assoc segment :downloaded result)))
-                                (assoc res message-id segment)))
-                   {} (:segments file))]
-    (assoc file :segments segments)))
+    (fn [n {:keys [reply filename message-id] :as val}]
+      (let [file    (state/get-file app-state filename)
+            segment (get (file :segments) message-id)]
+        (if (:cancelled segment)
+          (do
+            (log/info message-id "cancelled, skipping download")
+            (>!! reply :cancelled))
+          (try
+            (when-let [conn (nntp/connect (:nntp cfg))]
+              (with-open [sock ^Socket (:socket conn)]
+                (nntp/authenticate conn (-> cfg :nntp :user) (-> cfg :nntp :password))
+                (download-to-file cfg app-state conn n file segment)
+                (>!! reply :completed)))
+            (catch Exception e
+              (state/set-worker! app-state n :status :fatal :message (.getMessage e))
+              (>!! reply :failed)
+              (throw e))))))))
 
 (defn download
   [cfg file work]
   (let [replies  (chan)
-        file     (reload-completed cfg file)
         segments (filter #(not= :completed (:status %))
                    (vals (:segments file)))]
 
-    ;; put all segments on work queue for concurrent downloading
-    (doseq [segment segments]
+    (doseq [{:keys [message-id]} segments]
       (put! work
         {:reply      replies
-         :file       file
-         :segment    segment}))
+         :filename   (:filename file)
+         :message-id message-id}))
 
-    ;; combine all results back onto original file->segment
-    (async/reduce (fn [res {:keys [segment]}]
-                    (let [{:keys [message-id]} segment]
-                      (assoc-in res [:segments message-id] segment)))
-      file (async/take (count segments) replies))))
+    (let [results (<!! (async/reduce conj []
+                         (async/take (count segments) replies)))]
+      (cond
+        (every? #(= :completed %) results) :downloaded
+        (some #{:cancelled} results)       :cancelled
+        (some #{:failed} results)          :failed))))
 
 (defn start-download
   [cfg app-state {:keys [work out]} {:keys [filename status] :as file}]
-  (if (= :cancelled status)
-    (log/info "skipping cancelled file" filename)
-    (try
+  (try
+    (state/update-file! app-state filename assoc
+      :downloading-started-at (System/currentTimeMillis)
+      :status :downloading)
+    (let [result (download cfg file work)]
       (state/update-file! app-state filename assoc
-        :downloading-started-at (System/currentTimeMillis)
-        :status :downloading)
-      (let [result-ch (download cfg file work)
-            result    (<!! result-ch)]
-        (state/update-file! app-state filename assoc
-          :downloading-finished-at (System/currentTimeMillis)
-          :status :waiting)
-        (>!! out result))
-      (catch Exception e
-        (state/update-file! app-state filename assoc
-          :status :failed
-          :error (.getMessage e))
-        (log/error e "failed downloading")))))
+        :downloading-finished-at (System/currentTimeMillis)
+        :status result)
+
+      (when (= :downloaded result)
+        (>!! out filename)))
+    (catch Exception e
+      (state/update-file! app-state filename assoc
+        :status :failed
+        :error (.getMessage e))
+      (log/error e "failed downloading"))))
 
 (defn resume-incomplete
   [cfg app-state {:keys [in]}]
   (try
     (when-let [files (state/get-downloads app-state)]
       (doseq [[filename file] files
-              :when (not= :completed (:status file))]
+              :when (and (not= :completed (:status file))
+                      (not (:cancelled file)))]
         (log/info "resuming" filename)
-        (put! in file)))
+        (put! in filename)))
     (catch Exception e
       (log/error e "failed restarting incomplete"))))
 
 (defn start-listeners
   [cfg app-state {:keys [in] :as channels}]
   (workers (-> cfg :nntp :max-file-downloads) "downloader-listener" in
-    (fn [n file]
-      (start-download cfg app-state channels file)))
+    (fn [n filename]
+      (let [file (state/get-file app-state filename)]
+        (when-not (:cancelled file)
+          (start-download cfg app-state channels file)))))
   (resume-incomplete cfg app-state channels))
 
 (defrecord Downloader [cfg app-state channels]
