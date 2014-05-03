@@ -30,9 +30,10 @@ ul#workers li {
     margin: 0 1px 1px 0;
 }
 
+.connecting  { background: #f0ad4e; }
 .waiting     { background: #999; }
 .downloading { background: #5cb85c; }
-.fatal       { background: #d9534f; }
+.error       { background: #d9534f; }
 
 #downloads {
     font-size: small;

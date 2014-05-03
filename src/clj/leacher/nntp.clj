@@ -1,7 +1,6 @@
 (ns leacher.nntp
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
-            [clojure.tools.logging :as log]
             [leacher.utils :refer [parse-long]])
   (:import (java.io BufferedReader ByteArrayOutputStream Writer)
            (java.net Socket)
@@ -24,7 +23,7 @@
         conn   {:socket socket
                 :in     (io/reader socket :encoding ENCODING)
                 :out    (io/writer socket :encoding ENCODING)}]
-    (log/debug "initial response" (response conn))
+    (response conn)
     conn))
 
 (defn write
@@ -46,7 +45,7 @@
                        :body body}]
     (if (>= code 400)
       (throw (ex-info "error response" resp))
-      (log/spy resp))))
+      resp)))
 
 (defn header-response
   [{^BufferedReader in :in}]
@@ -88,7 +87,6 @@
 
 (defn authenticate
   [conn user password]
-  (log/debug "authenticating")
   (write conn (str "AUTHINFO USER " user))
   (let [resp (response conn)]
     (when (<= 300 (:code resp) 399)
@@ -97,7 +95,6 @@
 
 (defn group
   [conn name-of]
-  (log/debug "changing group:" name-of)
   (write conn (str "GROUP " name-of))
   (let [resp              (response conn)
         [number low high] (string/split (:body resp) #" ")]
@@ -109,7 +106,6 @@
 
 (defn article
   [conn message-id]
-  (log/debug "getting article:" message-id)
   (write conn (str "ARTICLE " message-id))
   (let [resp    (response conn)
         headers (header-response conn)
