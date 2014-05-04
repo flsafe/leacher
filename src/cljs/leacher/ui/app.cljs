@@ -207,6 +207,11 @@
           " - "
           (dom/span #js {:className "rate"}
             (->bytes-display rate) "/sec")
+          ", "
+          (dom/span #js {:className "segments"}
+            (:segments-completed file) "/"
+            (:total-segments file))
+          " segments"
           (when completed?
             (dom/span #js {:className "timing"}
               ", downloaded in "

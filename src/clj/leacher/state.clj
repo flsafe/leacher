@@ -111,7 +111,7 @@
   (set-state! app-state update-in [:downloads]
     (fn [m]
       (reduce-kv (fn [res filename file]
-                   (if (= :completed (:status file))
+                   (if (contains? #{:completed :cancelled} (:status file))
                      res
                      (assoc res filename file)))
         {} m))))

@@ -17,10 +17,10 @@
 (defn clean-segments
   [file]
   (doseq [segment (-> file :segments vals)
-          :let [f (:downloaded segment)]]
-    (when f
-      (log/debug "cleaner deleting" (str f))
-      (fs/delete f))))
+          :let [f (:downloaded segment)]
+          :when (and f (fs/exists? f))]
+    (log/debug "cleaner deleting" (str f))
+    (fs/delete f)))
 
 (defn clean
   [cfg app-state {:keys [filename] :as file}]

@@ -31,6 +31,7 @@ ul#workers li {
 }
 
 .connecting  { background: #f0ad4e; }
+.cancelled   { background: #f0ad4e; }
 .waiting     { background: #999; }
 .downloading { background: #5cb85c; }
 .error       { background: #d9534f; }
@@ -55,7 +56,7 @@ ul#workers li {
     font-weight: bold;
 }
 
-#downloads .bytes, #downloads .rate, #downloads .timing {
+#downloads .bytes, #downloads .rate, #downloads .timing, #downloads .segments {
     color: #666;
     font-style: italic;
 }
