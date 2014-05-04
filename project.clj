@@ -5,7 +5,6 @@
                  [org.clojure/clojure "1.5.1"]
                  [org.clojure/tools.cli "0.3.1"]
                  [org.clojure/data.zip "0.1.1"]
-                 [org.clojure/core.incubator "0.1.3"]
                  [org.clojure/tools.namespace "0.2.4"]
                  [org.clojure/core.async "0.1.267.0-0d7780-alpha"]
                  [org.clojure/tools.logging "0.2.6"]
@@ -21,12 +20,9 @@
 
                  ;; http stuff
                  [ring "1.2.2"]
-                 [ring-cors "0.1.0"]
                  [hiccup "1.0.5"]
                  [http-kit "2.1.18"]
                  [compojure "1.1.6"]
-                 [fogus/ring-edn "0.2.0"]
-                 [hiccup "1.0.5"]
 
                  ;; cljs stuff
                  [org.clojure/clojurescript "0.0-2202"]
@@ -34,13 +30,11 @@
                  [secretary "1.1.0"]
 
                  ;; omg logging
-                 [log4j "1.2.17"]
-
-                 [slamhound "1.5.4"]]
+                 [log4j "1.2.17"]]
 
   :plugins [[lein-cljsbuild "1.0.3"]]
 
-  :source-paths ["src/clj" "src/cljs"]
+  :source-paths ["src/clj"]
 
   :main leacher.main
 
@@ -50,7 +44,7 @@
              :uberjar {:aot [leacher.main]}}
 
   :cljsbuild {:builds [{:id           "dev"
-                        :source-paths ["src/clj" "src/cljs"]
+                        :source-paths ["src/cljs"]
                         :compiler     {:output-to     "resources/public/js/app.js"
                                        :output-dir    "resources/public/out-dev"
                                        :optimizations :whitespace}}]})
