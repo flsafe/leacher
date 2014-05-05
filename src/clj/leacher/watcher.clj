@@ -1,6 +1,6 @@
 (ns leacher.watcher
-  (:require [clojure.core.async :as async :refer [>!! alt!! chan
-                                                  thread]]
+  (:require [clojure.core.async :as async :refer [>! alt! chan
+                                                  go-loop]]
             [clojure.set :as set]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
@@ -9,22 +9,21 @@
 (defn start-watching
   [dir {:keys [out ctl]}]
   (let [glob (str dir "/*.nzb")]
-    (thread
-      (loop [previous #{}]
-        (alt!!
-          (async/timeout 1000)
-          ([_]
-             (let [current   (set (fs/glob glob))
-                   new-files (set/difference current previous)]
-               (when-not (empty? new-files)
-                 (doseq [f new-files]
-                   (log/info "putting new file" f "on out chan")
-                   (>!! out f)))
-               (recur current)))
+    (go-loop [previous #{}]
+      (alt!
+        (async/timeout 1000)
+        ([_]
+           (let [current   (set (fs/glob glob))
+                 new-files (set/difference current previous)]
+             (when-not (empty? new-files)
+               (doseq [f new-files]
+                 (log/info "putting new file" f "on out chan")
+                 (>! out f)))
+             (recur current)))
 
-          ctl
-          ([_]
-             (log/debug "exiting")))))))
+        ctl
+        ([_]
+           (log/debug "exiting"))))))
 
 ;; component
 

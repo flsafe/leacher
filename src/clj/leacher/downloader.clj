@@ -37,7 +37,7 @@
 (defn with-reconnecting
   [nntp-cfg app-state n body-fn]
   (let [retry (atom true)
-        wait  (atom 5)]
+        wait  (atom 1)]
     (while @retry
       (try
         (state/set-worker! app-state n :status :connecting)
@@ -51,7 +51,7 @@
           (state/set-worker! app-state n :status :error :message (.getMessage e))
           (log/errorf e "connection error, retrying in %ds" @wait)
           (Thread/sleep (* 1000 @wait))
-          (swap! wait #(min (* % 2) 300)))))))
+          (swap! wait #(min (* % 2) 30)))))))
 
 (defn start-workers
   [cfg app-state {:keys [work]}]
