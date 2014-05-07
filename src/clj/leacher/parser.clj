@@ -13,11 +13,13 @@
   (go-loop []
     (if-let [f (<! in)]
       (let [files (nzb/parse f)]
-        (doseq [[filename file] files
-                :when (not (state/get-file app-state filename))]
-          (state/set-file! app-state filename
-            (assoc file :status :waiting))
-          (>! out filename))
+        (doseq [[filename src-file] files
+                :let [file (state/new-scope app-state :downloads filename)]
+                :when (not @file)]
+          (state/reset! file (assoc src-file :status :waiting))
+          (log/info "sending file to downloader" @file)
+          (>! out file))
+        (fs/delete f)
         (recur))
       (log/info "exiting"))))
 

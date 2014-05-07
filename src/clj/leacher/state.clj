@@ -1,4 +1,8 @@
 (ns leacher.state
+  (:refer-clojure :rename {get-in core-get-in
+                           reset! core-reset!
+                           swap! core-swap!}
+                  :exclude [assoc!])
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log]
@@ -69,14 +73,57 @@
 
 (defn get-state
   [app-state & ks]
-  (get-in (state app-state) ks))
+  (core-get-in (state app-state) ks))
 
 (defn set-state!
   [app-state f & args]
   (try
-    (apply swap! (:state app-state) f args)
+    (apply core-swap! (:state app-state) f args)
     (catch Exception e
       (log/error e "failed to set state"))))
+
+;; scoped data
+
+(defrecord Scope [app-state path]
+  clojure.lang.IDeref
+  (deref [this]
+    (core-get-in @(:state app-state) path)))
+
+(prefer-method print-method clojure.lang.IDeref clojure.lang.IRecord)
+
+(defn new-scope
+  [from & path]
+  (let [[app-state path] (if (instance? Scope from)
+                           [(:app-state from) (into (:path from) path)]
+                           [from path])]
+    (map->Scope {:app-state app-state :path (vec path)})))
+
+(defn get-in
+  [scope & ks]
+  (apply get-state (:app-state scope) (into (:path scope) ks)))
+
+(defn reset!
+  [scope val]
+  (set-state! (:app-state scope) assoc-in (:path scope) val))
+
+(defn assoc!
+  [scope key val & kvs]
+  (set-state! (:app-state scope) assoc-in (conj (:path scope) key) val)
+  (if kvs
+    (if (next kvs)
+      (recur scope (first kvs) (second kvs) (nnext kvs)))))
+
+(defn assoc-in!
+  [scope ks v]
+  (set-state! (:app-state scope) assoc-in (into (:path scope) ks) v))
+
+(defn update-in!
+  [scope ks f & args]
+  (apply set-state! (:app-state scope) update-in (into (:path scope) ks) f args))
+
+(defn swap!
+  [scope f & args]
+  (apply set-state! (:app-state scope) update-in (:path scope) f args))
 
 ;; downloads state
 

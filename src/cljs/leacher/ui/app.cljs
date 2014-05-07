@@ -126,7 +126,9 @@
 
 (def music-ext   #{"mp3" "m4p" "flac" "ogg"})
 (def video-ext   #{"avi" "mp4" "mpg" "mkv"})
-(def archive-ext #{"zip" "rar" "tar" "gz" "par" "par2"})
+(def archive-ext #{"zip" "rar" "tar" "gz" "par" "par2" #"r\d\d"})
+
+
 
 (defn file->glyphicon
   [filename]

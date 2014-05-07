@@ -3,7 +3,7 @@
             [clojure.tools.namespace.repl :refer (refresh)]
             [clojure.java.io :as io]
             [clojure.edn :as edn]
-            [clojure.core.async :refer [put!]]
+            [clojure.core.async :as async :refer [put!]]
             [leacher.main :as app]
             [leacher.config :as cfg]))
 
@@ -34,5 +34,7 @@
 
 (comment
   (go)
+  (stop)
+
 
   )
