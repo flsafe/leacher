@@ -1,8 +1,6 @@
 (ns leacher.state
-  (:refer-clojure :rename {get-in core-get-in
-                           reset! core-reset!
-                           swap! core-swap!}
-                  :exclude [assoc!])
+  (:refer-clojure :rename {swap! core-swap!}
+                  :exclude [assoc! reset!])
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log]
@@ -73,7 +71,7 @@
 
 (defn get-state
   [app-state & ks]
-  (core-get-in (state app-state) ks))
+  (get-in (state app-state) ks))
 
 (defn set-state!
   [app-state f & args]
@@ -87,9 +85,11 @@
 (defrecord Scope [app-state path]
   clojure.lang.IDeref
   (deref [this]
-    (core-get-in @(:state app-state) path)))
+    (get-in @(:state app-state) path)))
 
-(prefer-method print-method clojure.lang.IDeref clojure.lang.IRecord)
+(prefer-method print-method clojure.lang.IRecord clojure.lang.IDeref)
+(prefer-method print-method clojure.lang.IRecord clojure.lang.IPersistentMap)
+(prefer-method print-method clojure.lang.IDeref clojure.lang.IPersistentMap)
 
 (defn new-scope
   [from & path]
@@ -98,20 +98,15 @@
                            [from path])]
     (map->Scope {:app-state app-state :path (vec path)})))
 
-(defn get-in
-  [scope & ks]
-  (apply get-state (:app-state scope) (into (:path scope) ks)))
-
 (defn reset!
   [scope val]
   (set-state! (:app-state scope) assoc-in (:path scope) val))
 
 (defn assoc!
   [scope key val & kvs]
-  (set-state! (:app-state scope) assoc-in (conj (:path scope) key) val)
-  (if kvs
-    (if (next kvs)
-      (recur scope (first kvs) (second kvs) (nnext kvs)))))
+  (set-state! (:app-state scope) update-in (:path scope)
+    (fn [m]
+      (apply assoc m key val kvs))))
 
 (defn assoc-in!
   [scope ks v]
@@ -124,78 +119,3 @@
 (defn swap!
   [scope f & args]
   (apply set-state! (:app-state scope) update-in (:path scope) f args))
-
-;; downloads state
-
-(defn get-downloads
-  [app-state]
-  (get-state app-state :downloads))
-
-(defn get-file
-  [app-state filename]
-  (get-state app-state :downloads filename))
-
-(defn set-file!
-  [app-state filename file]
-  (set-state! app-state assoc-in [:downloads filename] file))
-
-(defn update-file!
-  [app-state filename f & args]
-  (apply set-state! app-state update-in
-    [:downloads filename] f args))
-
-(defn get-segment
-  [app-state filename message-id]
-  (get-state app-state :downloads filename :segments message-id))
-
-(defn update-segment!
-  [app-state filename message-id f & args]
-  (apply set-state! app-state update-in
-    [:downloads filename :segments message-id] f args))
-
-(defn clear-completed!
-  [app-state]
-  (set-state! app-state update-in [:downloads]
-    (fn [m]
-      (reduce-kv (fn [res filename file]
-                   (if (contains? #{:completed :cancelled} (:status file))
-                     res
-                     (assoc res filename file)))
-        {} m))))
-
-(defn cancel-values
-  [res k v]
-  (assoc res k (assoc v :cancelled true)))
-
-(defn cancel-file
-  [file]
-  (-> file
-    (assoc :cancelled true
-           :segments (reduce-kv cancel-values {} (:segments file)))))
-
-(defn cancel-all!
-  [app-state]
-  (set-state! app-state update-in [:downloads]
-    (fn [m]
-      (into {}
-        (for [[filename file] m]
-          [filename (cancel-file file)])))))
-
-;; worker state
-
-(defn set-worker!
-  [app-state n & {:as data}]
-  (set-state! app-state assoc-in [:workers n] data))
-
-(comment
-
-  {:downloads {"a.zip"        {:status :waiting
-                               :segments {"" {}}}
-               "somefile.mp3" {:status :downloading
-                               :segments {"<23b@asdf.com>" {}}}}
-   :workers   [{:status :waiting}
-               {:status     :downloading
-                :file       "somefile.mp3"
-                :message-id "<23b@asdf.com>"}]}
-
-  )

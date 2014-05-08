@@ -8,6 +8,34 @@
             [org.httpkit.server :refer [close on-close run-server send!
                                         with-channel on-receive]]))
 
+(defn clear-completed!
+  [app-state]
+  (state/set-state! app-state update-in [:downloads]
+    (fn [m]
+      (reduce-kv (fn [res filename file]
+                   (if (contains? #{:completed :cancelled} (:status file))
+                     res
+                     (assoc res filename file)))
+        {} m))))
+
+(defn cancel-values
+  [res k v]
+  (assoc res k (assoc v :cancelled true)))
+
+(defn cancel-file
+  [file]
+  (-> file
+    (assoc :cancelled true
+           :segments (reduce-kv cancel-values {} (:segments file)))))
+
+(defn cancel-all!
+  [app-state]
+  (state/set-state! app-state update-in [:downloads]
+    (fn [m]
+      (reduce-kv (fn [res filename file]
+                   (assoc res filename (cancel-file file)))
+        {} m))))
+
 ;; remove segments from state sent to client, not needed and large
 ;; amount of data
 (defn without-segments
@@ -64,8 +92,8 @@
       (fn [data]
         (let [msg (edn/read-string data)]
           (case (:type msg)
-            :clear-completed (state/clear-completed! app-state)
-            :cancel-all (state/cancel-all! app-state)))))
+            :clear-completed (clear-completed! app-state)
+            :cancel-all (cancel-all! app-state)))))
 
     (on-close channel
       (fn [status]
