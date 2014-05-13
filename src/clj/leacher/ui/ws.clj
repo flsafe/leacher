@@ -5,6 +5,8 @@
             [clojure.edn :as edn]
             [com.stuartsierra.component :as component]
             [leacher.state :as state]
+            [leacher.nntp :as nntp]
+            [leacher.settings :as stg]
             [org.httpkit.server :refer [close on-close run-server send!
                                         with-channel on-receive]]))
 
@@ -32,9 +34,7 @@
   [app-state]
   (state/set-state! app-state update-in [:downloads]
     (fn [m]
-      (reduce-kv (fn [res filename file]
-                   (assoc res filename (cancel-file file)))
-        {} m))))
+      (reduce-kv #(assoc %1 %2 (cancel-file %3)) {} m))))
 
 ;; remove segments from state sent to client, not needed and large
 ;; amount of data
@@ -82,8 +82,27 @@
           (send! ch v))
         (recur)))))
 
+(defn settings-update
+  [settings-state settings]
+  (log/info "updating settings to" settings)
+  (stg/reset-with! settings-state settings))
+
+(defn settings-test
+  [settings]
+  (try
+    (let [conn     (nntp/connect settings)]
+      (with-open [s ^java.net.Socket (:socket conn)]
+        (nntp/authenticate conn (:user settings) (:password settings))
+        {:type   :settings-test-result
+         :result :success}))
+    (catch Exception e
+      (log/error e)
+      {:type   :settings-test-result
+       :result :error
+       :error  (or (ex-data e) (.getMessage e))})))
+
 (defn ws-handler
-  [clients app-state req]
+  [clients app-state settings req]
   (with-channel req channel
     (log/info "client connected from" (:remote-addr req))
     (swap! clients conj channel)
@@ -93,7 +112,10 @@
         (let [msg (edn/read-string data)]
           (case (:type msg)
             :clear-completed (clear-completed! app-state)
-            :cancel-all (cancel-all! app-state)))))
+            :cancel-all      (cancel-all! app-state)
+            :settings-update (settings-update settings (:settings msg))
+            :settings-test   (send! channel
+                               (pr-str (settings-test (:settings msg))))))))
 
     (on-close channel
       (fn [status]
@@ -102,14 +124,14 @@
 
 ;; component
 
-(defrecord WsApi [cfg app-state clients stop-server-fn events work]
+(defrecord WsApi [cfg app-state settings clients stop-server-fn events work]
   component/Lifecycle
   (start [this]
     (if stop-server-fn
       this
       (let [clients        (atom #{})
             work           (chan)
-            stop-server-fn (run-server (partial ws-handler clients app-state) cfg)]
+            stop-server-fn (run-server #(ws-handler clients app-state settings %) cfg)]
         (log/info "starting")
         (start-publisher clients work)
         (state/watch app-state :ws-watch (partial on-update work))

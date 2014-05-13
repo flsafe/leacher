@@ -24,14 +24,12 @@ ul#key li {
 
 ul#workers li {
     float: left;
-    width: 15px;
-    height: 15px;
-    -webkit-border-radius: 7px;
+    width: 10px;
+    height: 10px;
     margin: 0 1px 1px 0;
 }
 
 .connecting  { background: #f0ad4e; }
-.cancelled   { background: #f0ad4e; }
 .waiting     { background: #999; }
 .downloading { background: #5cb85c; }
 .error       { background: #d9534f; }
@@ -44,6 +42,10 @@ ul#workers li {
     position: relative;
     border-bottom: 1px solid #ccc;
     padding: 5px 0;
+}
+
+#downloads li.cancelled span {
+    text-decoration: line-through;
 }
 
 #downloads .icon {

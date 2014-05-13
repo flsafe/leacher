@@ -12,6 +12,7 @@
             [leacher.parser :as parser]
             [leacher.decoder :as decoder]
             [leacher.state :as state]
+            [leacher.settings :as settings]
             [leacher.watcher :as watcher]
             [leacher.conductor :as conductor]
             [leacher.cleaner :as cleaner]
@@ -23,6 +24,7 @@
 
 (def components
   [:app-state
+   :settings
    :downloader
    :parser
    :decoder
@@ -47,11 +49,13 @@
     (map->LeacherSystem
       {:cfg        cfg
        :app-state  (state/new-app-state (:app-state cfg) events)
+       :settings   (component/using (settings/new-settings)
+                     [:app-state])
        :watcher    (watcher/new-watcher (-> cfg :dirs :queue))
        :parser     (component/using (parser/new-parser)
                      [:app-state])
        :downloader (component/using (downloader/new-downloader cfg)
-                     [:app-state])
+                     [:app-state :settings])
        :decoder    (component/using (decoder/new-decoder cfg)
                      [:app-state])
        :cleaner    (component/using (cleaner/new-cleaner cfg)
@@ -60,7 +64,7 @@
                      [:watcher :parser :downloader :decoder :cleaner])
        :http       (http/new-http-server cfg)
        :ws         (component/using (ws/new-ws-api (:ws-server cfg))
-                     [:app-state])})))
+                     [:app-state :settings])})))
 
 ;; entry point
 

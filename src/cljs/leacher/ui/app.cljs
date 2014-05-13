@@ -20,6 +20,7 @@
 (def config (atom {}))
 
 (def app-state (atom {:websocket :disconnected
+                      :settings  {}
                       :downloads {}
                       :workers   {}}))
 
@@ -74,9 +75,11 @@
               (goog.events.listen Events/MESSAGE
                 (fn [e]
                   (let [data (cljs.reader/read-string (.-message e))]
+                    (println data)
                     (put! out {:type :message :event e :data data})))))]
     (go-loop []
       (when-let [m (<! in)]
+        (println "sending:" m)
         (.send ws (pr-str m))
         (recur)))
     (.open ws (str "ws://localhost:" (-> @config :ws-server :port) "/ws"))
@@ -124,31 +127,25 @@
    :decoding          :primary
    :cleaning          :info})
 
-(def music-ext   #{"mp3" "m4p" "flac" "ogg"})
-(def video-ext   #{"avi" "mp4" "mpg" "mkv"})
-(def archive-ext #{"zip" "rar" "tar" "gz" "par" "par2" #"r\d\d"})
-
-
-
 (defn file->glyphicon
   [filename]
   (let [ext (last (string/split filename #"\."))]
-    (condp contains? ext
-      music-ext   "headphones"
-      video-ext   "film"
-      archive-ext "compressed"
+    (condp re-find ext
+      #"\.(mp3|m4p|flac|ogg)"              "headphones"
+      #"\.(avi|mp4|mpg|mkv)"               "film"
+      #"\.(zip|rar|tar|gz|par|par2|r\d\d)" "compressed"
       :nil)))
 
 (defn ->bytes-display
   [b]
-  (when b
-    (cond
-      (= js/Infinity b) "?"
-      (< b 1024)        (str (.toFixed b 0) " B")
-      (< b 1048576)     (str (.toFixed (/ b 1024) 0) " KB")
-      (< b 1.074e+9)    (str (.toFixed (/ b 1024 1024) 2) " MB")
-      (< b 1.1e+12)     (str (.toFixed (/ b 1024 1024 1024) 2) " GB")
-      :else             ">1 TB")))
+  (cond
+    (nil? b)          "0 B"
+    (= js/Infinity b) "?"
+    (< b 1024)        (str (.toFixed b 0) " B")
+    (< b 1048576)     (str (.toFixed (/ b 1024) 0) " KB")
+    (< b 1.074e+9)    (str (.toFixed (/ b 1024 1024) 2) " MB")
+    (< b 1.1e+12)     (str (.toFixed (/ b 1024 1024 1024) 2) " GB")
+    :else             ">1 TB"))
 
 (defn label
   [cls text & {:as attrs}]
@@ -195,7 +192,7 @@
         decoding-time    (time-diff (:decoding-started-at file)
                            (:decoding-finished-at file))
         percent-complete (int (* 100 (/ bytes-received total-bytes)))]
-    (dom/li nil
+    (dom/li #js {:className (if (:cancelled file) "cancelled")}
       (dom/div #js {:className "icon pull-left"}
         (when-let [s (file->glyphicon filename)]
           (dom/span #js {:className (str "glyphicon glyphicon-" s)})))
@@ -211,7 +208,7 @@
             (->bytes-display rate) "/sec")
           ", "
           (dom/span #js {:className "segments"}
-            (:segments-completed file) "/"
+            (get file :segments-completed 0) "/"
             (:total-segments file))
           " segments"
           (when completed?
@@ -276,12 +273,57 @@
                   :className (str "pull-right " (name status))}
       (name status))))
 
+(defn handle-change
+  [e key settings parse-fn]
+  (let [value (parse-fn (.. e -target -value))]
+    (om/update! settings key value)))
+
+(defn input-with-label
+  [title key settings & [attrs]]
+  (let [wrapper-class (get attrs :wrapper-class "form-group")
+        parse-fn      (get attrs :parse-fn identity)
+        attrs         (dissoc attrs :wrapper-class)]
+   (dom/div #js {:className wrapper-class}
+     (dom/label nil
+       title)
+     (dom/input
+       (clj->js (merge {:type      "text"
+                        :className "form-control input-sm"
+                        :value     (get settings key)
+                        :onChange  #(handle-change % key settings parse-fn)}
+                  attrs))))))
+
+(defn parse-int
+  [s]
+  (.parseInt js/window s))
+
+(defn settings-editor
+  [ws-msgs settings]
+  (dom/div #js {:className "col-xs-2"}
+    (input-with-label "Host" :host settings)
+    (input-with-label "Port" :port settings {:parse-fn parse-int})
+    (input-with-label "User" :user settings)
+    (input-with-label "Password" :password settings {:type "password"})
+    (input-with-label "SSL" :ssl? settings {:wrapper-class "checkbox" :type "checkbox" :className ""})
+    (input-with-label "Max. Connections"
+      :max-connections settings
+      {:parse-fn parse-int})
+    (dom/button #js {:className "btn btn-xs btn-success"
+                     :onClick   #(put! ws-msgs {:type     :settings-update
+                                                :settings @settings})}
+      "Save")
+    (dom/button #js {:className "btn btn-xs btn-warning"
+                     :onClick   #(put! ws-msgs {:type     :settings-test
+                                                :settings @settings})}
+      "Test")))
+
 (defn leacher-app
-  [{:keys [downloads workers websocket] :as app} owner]
+  [{:keys [downloads settings workers websocket] :as app} owner]
   (reify
     om/IInitState
     (init-state [_]
-      {:ws nil})
+      {:ws      nil
+       :ws-msgs (chan)})
 
     om/IWillMount
     (will-mount [this]
@@ -290,15 +332,21 @@
         (go-loop []
           (when-let [e (<! out)]
             (handle-event e)
+            (recur)))
+        (go-loop []
+          (when-let [msg (<! (om/get-state owner :ws-msgs))]
+            (>! in msg)
             (recur)))))
 
     om/IRenderState
-    (render-state [this {:keys [ws]}]
+    (render-state [this {:keys [ws ws-msgs]}]
       (dom/div #js {:className "container-fluid"}
-        (dom/div #js {:className "row"}
-          (connection-status websocket)
-          (workers-section workers))
-        (downloads-section downloads (:in ws))))))
+        (settings-editor ws-msgs settings)
+        (dom/div #js {:className "col-xs-10"}
+          (dom/div #js {:className "row"}
+            (connection-status websocket)
+            (workers-section workers))
+          (downloads-section downloads (:in ws)))))))
 
 (defn init
   [cfg]
