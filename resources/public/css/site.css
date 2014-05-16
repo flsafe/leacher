@@ -75,3 +75,7 @@ ul#workers li {
     bottom: 10px;
     height: 5px;
 }
+
+.settings-editor button {
+    margin-right: 5px;
+}

@@ -95,6 +95,10 @@
   [{:keys [data]}]
   (swap! app-state apply-deltas data))
 
+(defmethod handle-message :settings-test-result
+  [status]
+  (swap! app-state assoc :settings-status status))
+
 (defmulti handle-event :type)
 
 (defmethod handle-event :opened
@@ -274,15 +278,17 @@
       (name status))))
 
 (defn handle-change
-  [e key settings parse-fn]
-  (let [value (parse-fn (.. e -target -value))]
+  [e key settings value-fn & [parse-fn]]
+  (let [parse-fn (or parse-fn identity)
+        value    (parse-fn (value-fn (.. e -target)))]
     (om/update! settings key value)))
 
 (defn input-with-label
   [title key settings & [attrs]]
   (let [wrapper-class (get attrs :wrapper-class "form-group")
         parse-fn      (get attrs :parse-fn identity)
-        attrs         (dissoc attrs :wrapper-class)]
+        value-fn      (get attrs :value-fn #(.. % -value))
+        attrs         (dissoc attrs :wrapper-class :parse-fn :value-fn)]
    (dom/div #js {:className wrapper-class}
      (dom/label nil
        title)
@@ -290,21 +296,37 @@
        (clj->js (merge {:type      "text"
                         :className "form-control input-sm"
                         :value     (get settings key)
-                        :onChange  #(handle-change % key settings parse-fn)}
+                        :onChange  #(handle-change % key settings value-fn parse-fn)}
                   attrs))))))
+
+(defn checkbox-with-label
+  [title key settings & [attrs]]
+  (let [attrs (dissoc attrs :wrapper-class :parse-fn :value-fn)]
+   (dom/div #js {:className "checkbox"}
+     (dom/label nil
+       title)
+     (dom/input
+       (clj->js
+         (merge {:type      "checkbox"
+                 :checked   (get settings key)
+                 :onChange  (fn [e] (handle-change e key settings #(.-checked %)))}
+           attrs))))))
 
 (defn parse-int
   [s]
   (.parseInt js/window s))
 
 (defn settings-editor
-  [ws-msgs settings]
-  (dom/div #js {:className "col-xs-2"}
+  [ws-msgs settings settings-status]
+  (dom/div #js {:className "settings-editor col-xs-2"}
     (input-with-label "Host" :host settings)
     (input-with-label "Port" :port settings {:parse-fn parse-int})
     (input-with-label "User" :user settings)
     (input-with-label "Password" :password settings {:type "password"})
-    (input-with-label "SSL" :ssl? settings {:wrapper-class "checkbox" :type "checkbox" :className ""})
+    (checkbox-with-label "SSL" :ssl?
+      settings {:wrapper-class "checkbox"
+                :type          "checkbox"
+                :value-fn      #(.. % -checked)})
     (input-with-label "Max. Connections"
       :max-connections settings
       {:parse-fn parse-int})
@@ -315,10 +337,16 @@
     (dom/button #js {:className "btn btn-xs btn-warning"
                      :onClick   #(put! ws-msgs {:type     :settings-test
                                                 :settings @settings})}
-      "Test")))
+      "Test "
+      (let [icon-class (condp = (:result settings-status)
+                         :success "ok"
+                         :error "remove"
+                         "question")]
+        (dom/span #js {:className (str "status glyphicon glyphicon-" icon-class "-sign")}
+          nil)))))
 
 (defn leacher-app
-  [{:keys [downloads settings workers websocket] :as app} owner]
+  [{:keys [downloads settings settings-status workers websocket] :as app} owner]
   (reify
     om/IInitState
     (init-state [_]
@@ -341,7 +369,7 @@
     om/IRenderState
     (render-state [this {:keys [ws ws-msgs]}]
       (dom/div #js {:className "container-fluid"}
-        (settings-editor ws-msgs settings)
+        (settings-editor ws-msgs settings settings-status)
         (dom/div #js {:className "col-xs-10"}
           (dom/div #js {:className "row"}
             (connection-status websocket)
