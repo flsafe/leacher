@@ -15,23 +15,25 @@
 
 (defn download-to-file
   [cfg conn n file segment]
-  (let [filename   (:filename @file)
-        message-id (:message-id @segment)]
-    (state/assoc! segment :status :downloading)
+  (let [filename    (:filename @file)
+        message-id  (:message-id @segment)
+        result-file (fs/file (-> cfg :dirs :temp) message-id)]
 
-    (nntp/group conn (-> @file :groups first))
-    (let [resp   (nntp/article conn message-id)
-          result (fs/file (-> cfg :dirs :temp) message-id)]
-      (log/debugf "worker[%d]: copying bytes to %s" n (str result))
-      (io/copy (:bytes resp) result)
+    (if-not (fs/exists? result-file)
+      (do (state/assoc! segment :status :downloading)
+          (nntp/group conn (-> @file :groups first))
+          (let [resp (nntp/article conn message-id)]
+            (log/debugf "worker[%d]: copying bytes to %s" n (str result-file))
+            (io/copy (:bytes resp) result-file)))
+      (log/infof "%s already exists, not downloading again" (str result-file)))
 
-      (state/update-in! file [:bytes-received]
-        (fnil + 0) (:bytes @segment))
-      (state/update-in! file [:segments-completed]
-        (fnil inc 0))
-      (state/assoc! segment
-        :status :downloaded
-        :downloaded (fs/absolute-path result)))))
+    (state/update-in! file [:bytes-received]
+      (fnil + 0) (:bytes @segment))
+    (state/update-in! file [:segments-completed]
+      (fnil inc 0))
+    (state/assoc! segment
+      :status :downloaded
+      :downloaded (fs/absolute-path result-file))))
 
 (defn with-reconnecting
   [settings worker body-fn]
@@ -55,27 +57,28 @@
 
 (defn start-workers
   [cfg settings workers {:keys [work]}]
-  (w/workers (settings/get-setting settings :max-connections) "dl-worker" work
-    (fn [n {:keys [reply file segment] :as val}]
-      (let [worker     (nth workers n)
-            message-id (:message-id @segment)]
-        (if (:cancelled @segment)
-          (do
-            (log/info message-id "cancelled, skipping")
-            (>!! reply :cancelled))
-          (try
-            (with-reconnecting settings worker
-              (fn [conn]
-                (state/assoc! worker :status :downloading)
-                (download-to-file cfg conn n file segment)
-                (>!! reply :downloaded)
-                (state/assoc! worker :status :waiting)))
-            (catch Exception e
-              (log/error e "failed downloading" message-id)
-              (state/assoc! segment
-                :status :failed
-                :error  (.getMessage e))
-              (>!! reply :failed))))))))
+  (dotimes [n (settings/get-setting settings :max-connections)]
+    (let [worker (nth workers n)]
+      (thread
+        (with-reconnecting settings worker
+          (fn [conn]
+            (loop []
+              (state/assoc! worker :status :waiting)
+              (when-let [{:keys [reply file segment] :as val} (<!! work)]
+                (if (:cancelled @segment)
+                  (do (log/info (:message-id @segment) "cancelled, skipping")
+                      (>!! reply :cancelled))
+                  (do (try
+                        (state/assoc! worker :status :downloading)
+                        (download-to-file cfg conn n file segment)
+                        (>!! reply :downloaded)
+                        (catch Exception e
+                          (log/error e "failed downloading" (:message-id @segment))
+                          (state/assoc! segment
+                            :status :failed
+                            :error  (.getMessage e))
+                          (>!! reply :failed)))))
+                (recur)))))))))
 
 (defn download
   [file work]
@@ -111,7 +114,7 @@
         :downloading-finished-at (System/currentTimeMillis)
         :status result)
 
-      (when (= :downloaded result)
+      (when (not= :cancelled result)
         (>!! out file)))
     (catch Exception e
       (log/error e "failed downloading")
@@ -133,8 +136,16 @@
   [cfg {:keys [in] :as channels}]
   (w/workers (:max-file-downloads cfg) "dl-listener" in
     (fn [n file]
-      (when-not (:cancelled @file)
-        (start-download channels file)))))
+      (let [result-path (fs/file (-> cfg :dirs :complete)
+                          (:filename @file))
+            exists?     (fs/exists? result-path)]
+       (if-not (or (:cancelled @file) exists?)
+         (start-download channels file)
+         (do
+           (when exists?
+             (log/info "completed file exists at" (:filename @file))
+             (state/assoc! file :status :completed))
+           (log/info "skipping file" (:filename @file))))))))
 
 (defn build-worker-state
   [settings app-state]

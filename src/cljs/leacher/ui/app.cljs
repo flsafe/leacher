@@ -75,11 +75,9 @@
               (goog.events.listen Events/MESSAGE
                 (fn [e]
                   (let [data (cljs.reader/read-string (.-message e))]
-                    (println data)
                     (put! out {:type :message :event e :data data})))))]
     (go-loop []
       (when-let [m (<! in)]
-        (println "sending:" m)
         (.send ws (pr-str m))
         (recur)))
     (.open ws (str "ws://localhost:" (-> @config :ws-server :port) "/ws"))

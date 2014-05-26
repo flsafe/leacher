@@ -71,7 +71,7 @@
   [cfg app-state {:keys [out work]} file]
   (let [filename (:filename @file)]
    (try
-     (log/debug "got file" filename)
+     (log/info "got file" filename)
      (state/assoc! file
        :status :decoding
        :decoding-started-at (System/currentTimeMillis))
@@ -81,12 +81,17 @@
        (io/make-parents combined)
        (write-to file combined)
 
+       ;; throw away the decoded bytes to ensure they are GC'd
+       (state/update-in! file [:segments]
+         (fn [m]
+           (reduce-kv #(assoc %1 %2 (dissoc %3 :decoded)) {} m)))
+
        (state/assoc! file
          :status result
          :combined (fs/absolute-path combined)
          :decoding-finished-at (System/currentTimeMillis))
 
-       (when (= :decoded result)
+       (when (not= :cancelled result)
          (>!! out file)))
      (catch Exception e
        (log/error e "failed decoding" filename)))))

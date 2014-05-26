@@ -17,7 +17,7 @@
                 :let [file (state/new-scope app-state :downloads filename)]
                 :when (not @file)]
           (state/reset! file (assoc src-file :status :waiting))
-          (log/info "sending file to downloader" @file)
+          (log/info "sending file to downloader" (:filename @file))
           (>! out file))
         (fs/delete f)
         (recur))

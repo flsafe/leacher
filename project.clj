@@ -38,6 +38,9 @@
 
   :main leacher.main
 
+  :jvm-opts ["-Xmx2g"
+             "-XX:+CMSClassUnloadingEnabled"]
+
   :profiles {:dev     {:source-paths ["dev"]
                        :global-vars {*warn-on-reflection* true}}
              :prod    {:hooks [leiningen.cljsbuild]}
