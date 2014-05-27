@@ -40,19 +40,21 @@
         :key   (if (= \= c)
                  (recur :value res k v)
                  (recur :key res (str k c) v))
-        :value (condp = c
-                 \space
+        :value (cond
+                 (and (not= "name" k)
+                   (= c \space))
                  (let [k (keyword k)
                        f (get keyword-fns k identity)
                        v (f v)]
                    (recur :key (assoc res k v) nil nil))
 
-                 \return
+                 (= c \return)
                  (let [k (keyword k)
                        f (get keyword-fns k identity)
                        v (f v)]
                    (recur :done (assoc res k v) nil nil))
 
+                 :else
                  (recur :value res k (str v c)))))))
 
 (defn decode
