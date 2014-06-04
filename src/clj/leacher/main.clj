@@ -45,16 +45,21 @@
 
 (defn new-leacher-system
   [cfg]
-  (let [events (chan)]
+  (let [events (chan)
+        channels {:watcher    (chan)
+                  :parser     (chan)
+                  :downloader (chan)
+                  :decoder    (chan)
+                  :cleaner    (chan)}]
     (map->LeacherSystem
       {:cfg        cfg
        :app-state  (state/new-app-state (:app-state cfg) events)
        :settings   (component/using (settings/new-settings)
                      [:app-state])
-       :watcher    (watcher/new-watcher (-> cfg :dirs :queue))
-       :parser     (component/using (parser/new-parser)
+       :watcher    (watcher/new-watcher (-> cfg :dirs :queue) channels)
+       :parser     (component/using (parser/new-parser channels)
                      [:app-state])
-       :downloader (component/using (downloader/new-downloader cfg)
+       :downloader (component/using (downloader/new-downloader cfg channels)
                      [:app-state :settings])
        :decoder    (component/using (decoder/new-decoder cfg)
                      [:app-state])

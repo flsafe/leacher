@@ -123,18 +123,18 @@
         :error (.getMessage e)))))
 
 (defn resume-incomplete
-  [downloads {:keys [in]}]
+  [downloads {:keys [parser]}]
   (loge "restarting incomplete"
     (doseq [[filename src-file] @downloads
             :when (and (not= :completed (:status src-file))
                     (not (:cancelled src-file)))
             :let [file (state/new-scope downloads filename)]]
       (log/info "resuming" filename)
-      (put! in file))))
+      (put! parser file))))
 
 (defn start-listeners
-  [cfg {:keys [in] :as channels}]
-  (w/workers (:max-file-downloads cfg) "dl-listener" in
+  [cfg {:keys [parser] :as channels}]
+  (w/workers (:max-file-downloads cfg) "dl-listener" parser
     (fn [n file]
       (let [result-path (fs/file (-> cfg :dirs :complete)
                           (:filename @file))
@@ -155,30 +155,28 @@
       (state/assoc! worker :status :waiting))
     workers))
 
-(defrecord Downloader [cfg app-state channels settings]
+(defrecord Downloader [cfg app-state channels settings work]
   component/Lifecycle
   (start [this]
-    (if channels
+    (if work
       this
-      (let [channels  {:in   (chan 10)
-                       :out  (chan 10)
-                       :work (chan)}
+      (let [work      (chan)
             workers   (build-worker-state settings app-state)
             downloads (state/new-scope app-state :downloads)]
         (log/info "starting")
         (start-listeners cfg channels)
         (resume-incomplete downloads channels)
         (start-workers cfg settings workers channels)
-        (assoc this :channels channels))))
+        (assoc this :work work))))
   (stop [this]
-    (if channels
+    (if work
       (do
         (log/info "stopping")
-        (doseq [[_ ch] channels]
-          (close! ch))
-        (assoc this :channels nil))
+        (close! work)
+        (assoc this :work nil))
       this)))
 
 (defn new-downloader
-  [cfg]
-  (map->Downloader {:cfg cfg}))
+  [cfg channels]
+  (map->Downloader {:cfg      cfg
+                    :channels channels}))

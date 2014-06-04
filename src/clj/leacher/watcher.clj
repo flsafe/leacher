@@ -7,7 +7,7 @@
             [me.raynes.fs :as fs]))
 
 (defn start-watching
-  [dir {:keys [out ctl]}]
+  [dir {:keys [watcher]} ctl]
   (let [glob (str dir "/*.nzb")]
     (go-loop [previous #{}]
       (alt!
@@ -17,8 +17,8 @@
                  new-files (set/difference current previous)]
              (when-not (empty? new-files)
                (doseq [f new-files]
-                 (log/info "putting new file" f "on out chan")
-                 (>! out f)))
+                 (log/info "putting new file" f "on watcher chan")
+                 (>! watcher f)))
              (recur current)))
 
         ctl
@@ -27,26 +27,24 @@
 
 ;; component
 
-(defrecord Watcher [dir channels]
+(defrecord Watcher [dir channels ctl]
   component/Lifecycle
   (start [this]
-    (if-not channels
-      (let [channels {:out (chan)
-                      :ctl (chan)}]
-        (log/info "starting with" dir)
-        (start-watching dir channels)
-        (assoc this :channels channels))
+    (if-not ctl
+      (let [ctl (chan)]
+        (start-watching dir channels ctl)
+        (assoc this :ctl ctl))
       this))
 
   (stop [this]
-    (if channels
+    (if ctl
       (do
-        (log/info "stopping")
-        (doseq [[_ ch] channels]
-          (async/close! ch))
-        (assoc this :channels nil))
+        (async/close! (:watcher channels))
+        (async/close! ctl)
+        (assoc this :ctl nil))
       this)))
 
 (defn new-watcher
-  [dir]
-  (map->Watcher {:dir dir}))
+  [dir channels]
+  (map->Watcher {:dir      dir
+                 :channels channels}))

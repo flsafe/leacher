@@ -9,38 +9,33 @@
 ;; component
 
 (defn start-listening
-  [{:keys [in out]} app-state]
+  [{:keys [watcher parser]} app-state]
   (go-loop []
-    (if-let [f (<! in)]
+    (if-let [f (<! watcher)]
       (let [files (nzb/parse f)]
         (doseq [[filename src-file] files
                 :let [file (state/new-scope app-state :downloads filename)]
                 :when (not @file)]
           (state/reset! file (assoc src-file :status :waiting))
-          (log/info "sending file to downloader" (:filename @file))
-          (>! out file))
+          (log/info "putting" filename "on parser channel")
+          (>! parser file))
         (fs/delete f)
         (recur))
       (log/info "exiting"))))
 
-(defrecord Parser [channels app-state]
+(defrecord Parser [channels app-state process]
   component/Lifecycle
   (start [this]
-    (if-not channels
-      (let [channels {:in  (chan)
-                      :out (chan)}]
-        (start-listening channels app-state)
-        (assoc this :channels channels))
+    (if-not process
+      (let [process (start-listening channels app-state)]
+        (assoc this :process process))
       this))
 
   (stop [this]
-    (if channels
-      (do
-        (doseq [[_ ch] channels]
-          (async/close! ch))
-        (assoc this :channels nil))
+    (if process
+      (assoc this :process nil)
       this)))
 
 (defn new-parser
-  []
-  (map->Parser {}))
+  [channels]
+  (map->Parser {:channels channels}))

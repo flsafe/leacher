@@ -66,15 +66,18 @@
 
 (defn parse
   [input]
-  (-> (io/input-stream input)
-      (xml/parse startparse-sax)
-      zip/xml-zip
-      (zip-xml/xml-> :file)
-      (->> (mapv ->file)
-        (mapv (juxt :filename identity))
-        (into {}))))
+  (let [files          (-> (io/input-stream input)
+                         (xml/parse startparse-sax)
+                         zip/xml-zip
+                         (zip-xml/xml-> :file)
+                         (->> (mapv ->file)))
+        total-segments (reduce + (map :total-segments files))]
+    {:files          (->> files
+                       (mapv (juxt :filename identity))
+                       (into {}))
+     :total-segments total-segments}))
 
 (comment
-  (first (parse "/home/gareth/.leacher/slayer.nzb"))
+  (keys (parse "/home/gareth/.leacher/slayer.nzb"))
 
   )
