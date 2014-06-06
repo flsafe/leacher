@@ -9,7 +9,6 @@
             [leacher.utils :refer [on-shutdown]]
             [leacher.config :as config]
             [leacher.downloader :as downloader]
-            [leacher.parser :as parser]
             [leacher.decoder :as decoder]
             [leacher.state :as state]
             [leacher.settings :as settings]
@@ -26,7 +25,6 @@
   [:app-state
    :settings
    :downloader
-   :parser
    :decoder
    :watcher
    :conductor
@@ -47,7 +45,6 @@
   [cfg]
   (let [events (chan)
         channels {:watcher    (chan)
-                  :parser     (chan)
                   :downloader (chan)
                   :decoder    (chan)
                   :cleaner    (chan)}]
@@ -57,16 +54,10 @@
        :settings   (component/using (settings/new-settings)
                      [:app-state])
        :watcher    (watcher/new-watcher (-> cfg :dirs :queue) channels)
-       :parser     (component/using (parser/new-parser channels)
-                     [:app-state])
        :downloader (component/using (downloader/new-downloader cfg channels)
                      [:app-state :settings])
        :decoder    (component/using (decoder/new-decoder cfg)
                      [:app-state])
-       :cleaner    (component/using (cleaner/new-cleaner cfg)
-                     [:app-state])
-       :conductor  (component/using (conductor/new-conductor cfg)
-                     [:watcher :parser :downloader :decoder :cleaner])
        :http       (http/new-http-server cfg)
        :ws         (component/using (ws/new-ws-api (:ws-server cfg))
                      [:app-state :settings])})))

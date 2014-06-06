@@ -40,6 +40,7 @@
       (let [replies (async/take (:total-segments nzb) reply)]
         (loop []
           (when-let [{:keys [filename segment decoded]} (<!! replies)]
+            (log/debug "writing segment" (:message-id segment))
             (let [to-file (io/file (-> cfg :dirs :temp) filename)
                   begin   (-> decoded :keywords :part :begin dec)
                   end     (-> decoded :keywords :part :end dec)]
@@ -65,10 +66,12 @@
       (log/info "waiting for downloads of segments for" (str nzb-file))
       (let [nzb (loop [nzb     nzb
                        replies (async/take (:total-segments nzb) reply)]
-                  (if-let [{:keys [filename segment downloaded-path]} (<!! replies)]
-                    (recur (assoc-in nzb
-                             [:files filename :segments (:message-id segment) :downloaded-path]
-                             downloaded-path) replies)
+                  (if-let [{:keys [file segment downloaded-path]} (<!! replies)]
+                    (let [filename (:filename file)]
+                      (log/debug "received reply for" filename "downloaded to" downloaded-path)
+                      (recur (assoc-in nzb
+                               [:files filename :segments (:message-id segment) :downloaded-path]
+                               downloaded-path) replies))
                     nzb))]
         (log/info "finished downloading" (str nzb-file))
         (handler (assoc m :nzb nzb))))))
@@ -79,7 +82,8 @@
     (let [complete-dir (-> cfg :dirs :complete)
           nzb          (assoc (nzb/parse nzb-file) :complete-dir complete-dir)]
       (log/info "parsed" (str nzb-file))
-      (handler (assoc m :nzb nzb)))))
+      (handler (assoc m :nzb nzb))
+      (fs/delete nzb-file))))
 
 (defn log-errors
   [handler]
