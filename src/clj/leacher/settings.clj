@@ -1,27 +1,60 @@
 (ns leacher.settings
   (:require [com.stuartsierra.component :as component]
-            [leacher.state :as state]))
+            [leacher.config :as config]
+            [clojure.string :as string]
+            [me.raynes.fs :as fs]
+            [clojure.java.io :as io]))
 
 (def template
-  {:host               ""
-   :port               119
-   :ssl?               false
-   :user               ""
-   :password           ""
-   :max-connections    10})
+  {:host            ""
+   :port            119
+   :ssl?            false
+   :user            ""
+   :password        ""
+   :max-connections 10})
 
-(defrecord Settings [app-state state]
+(def parsers
+  {:port            #(Long. ^String %)
+   :ssl?            #(Boolean. ^String %)
+   :max-connections #(Long. ^String %)})
+
+(defn write-settings
+  [m]
+  (let [f (fs/file config/settings-file)]
+    (with-open [w ^java.io.BufferedWriter (io/writer f)]
+      (doseq [[k v] m]
+        (.write w (str (name k) ": " v))
+        (.newLine w)))))
+
+(defn ensure-settings
+  []
+  (when-not (fs/exists? config/settings-file)
+    (write-settings template)))
+
+(defn read-settings
+  []
+  (ensure-settings)
+  (-> (slurp config/settings-file)
+    (string/split #"\n")
+    (->> (map #(string/split % #":"))
+      (reduce #(assoc %1 (keyword (first %2))
+                      ((get parsers (keyword (first %2)) identity)
+                       (string/trim (last %2)))) {}))))
+
+(defrecord Settings [state]
   component/Lifecycle
   (start [this]
     (if-not state
-      (let [state (state/new-scope app-state :settings)]
-        (when (nil? @state)
-          (state/reset! state template))
+      (let [state (atom (read-settings))]
+        (add-watch state :write-changes
+          (fn [_ _ _ new]
+            (write-settings new)))
         (assoc this :state state))
       this))
   (stop [this]
     (if state
-      (assoc this :state nil)
+      (do (remove-watch state :write-changes)
+          (assoc this :state nil))
       this)))
 
 (defn new-settings
@@ -30,9 +63,9 @@
 
 ;;
 
-(defn reset-with!
+(defn merge-with!
   [settings new]
-  (state/reset! (:state settings) new))
+  (swap! (:state settings) merge new))
 
 (defn get-setting
   [settings key]

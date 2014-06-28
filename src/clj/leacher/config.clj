@@ -1,14 +1,17 @@
-(ns leacher.config)
+(ns leacher.config
+  (:require [me.raynes.fs :as fs]))
 
 (defonce home-dir
-  (str (System/getProperty "user.home") "/.leacher"))
+  (fs/absolute-path (fs/file (System/getProperty "user.home") ".leacher")))
 
-(def template
-  {:decoders           5
-   :max-file-downloads 5
-   :app-state          {:path     (str home-dir "/state.edn")}
-   :dirs               {:complete (str home-dir "/complete")
-                        :queue    (str home-dir "/queue")
-                        :temp     (str home-dir "/tmp")}
-   :http-server        {:port 8090}
-   :ws-server          {:port 8091}})
+(defonce settings-file
+  (fs/absolute-path (fs/file home-dir "settings")))
+
+(defonce complete-dir
+  (fs/absolute-path (fs/file home-dir "complete")))
+
+(defonce queue-dir
+  (fs/absolute-path (fs/file home-dir "queue")))
+
+(defonce tmp-dir
+  (fs/absolute-path (fs/file home-dir "tmp")))

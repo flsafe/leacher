@@ -8,31 +8,23 @@
             [com.stuartsierra.component :as component]
             [leacher.utils :refer [on-shutdown]]
             [leacher.config :as config]
+            [leacher.pipeline :as pipeline]
             [leacher.downloader :as downloader]
             [leacher.decoder :as decoder]
-            [leacher.state :as state]
             [leacher.settings :as settings]
-            [leacher.watcher :as watcher]
-            [leacher.conductor :as conductor]
-            [leacher.cleaner :as cleaner]
-            [leacher.ui.http :as http]
-            [leacher.ui.ws :as ws])
+            [leacher.watcher :as watcher])
   (:gen-class))
 
 ;; system
 
 (def components
-  [:app-state
-   :settings
+  [:settings
+   :pipeline
    :downloader
    :decoder
-   :watcher
-   :conductor
-   :cleaner
-   :http
-   :ws])
+   :watcher])
 
-(defrecord LeacherSystem [cfg]
+(defrecord LeacherSystem []
   component/Lifecycle
   (start [this]
     (log/info "starting leacher")
@@ -42,25 +34,26 @@
     (component/stop-system this components)))
 
 (defn new-leacher-system
-  [cfg]
-  (let [events (chan)
-        channels {:watcher    (chan)
-                  :downloader (chan)
-                  :decoder    (chan)
-                  :cleaner    (chan)}]
-    (map->LeacherSystem
-      {:cfg        cfg
-       :app-state  (state/new-app-state (:app-state cfg) events)
-       :settings   (component/using (settings/new-settings)
-                     [:app-state])
-       :watcher    (watcher/new-watcher (-> cfg :dirs :queue) channels)
-       :downloader (component/using (downloader/new-downloader cfg channels)
-                     [:app-state :settings])
-       :decoder    (component/using (decoder/new-decoder cfg)
-                     [:app-state])
-       :http       (http/new-http-server cfg)
-       :ws         (component/using (ws/new-ws-api (:ws-server cfg))
-                     [:app-state :settings])})))
+  []
+  (map->LeacherSystem
+    {:channels   {:watcher   (chan 20)
+                  :downloads (chan 500)
+                  :decodes   (chan 500)
+                  :shutdown  (chan)}
+
+     :settings   (settings/new-settings)
+
+     :watcher    (component/using (watcher/new-watcher)
+                   [:channels])
+
+     :pipeline   (component/using (pipeline/new-pipeline)
+                   [:channels])
+
+     :downloader (component/using (downloader/new-downloader)
+                   [:channels :settings])
+
+     :decoder    (component/using (decoder/new-decoder)
+                   [:channels])}))
 
 ;; entry point
 
@@ -87,17 +80,9 @@
 
     (when-not (fs/exists? config/home-dir)
       (println "setting up leacher home directory" config/home-dir)
-      (fs/mkdir config/home-dir)
-      (println "creating template config file")
-      (let [config-file (fs/file config/home-dir "config.edn")]
-        (spit config-file (pr-str config/template))
-        (println "please edit" (fs/absolute-path config-file))
-        (System/exit 0)))
+      (fs/mkdir config/home-dir))
 
-    (let [config-file (fs/file config/home-dir "config.edn")
-          cfg         (edn/read-string (slurp (io/reader config-file)))
-          _           (log/info "starting with" cfg)
-          system      (component/start (new-leacher-system cfg))]
+    (let [system (component/start (new-leacher-system))]
       (on-shutdown
         (log/info "interrupted! shutting down")
         (component/stop system))

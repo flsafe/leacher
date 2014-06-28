@@ -2,86 +2,105 @@
   (:require [leacher.nzb :as nzb]
             [leacher.nntp :as nntp]
             [leacher.decoders.yenc :as yenc]
+            [leacher.config :as config]
             [me.raynes.fs :as fs]
-            [clojure.core.async :as async :refer [onto-chan chan <!!]]
+            [com.stuartsierra.component :as component]
+            [clojure.core.async :as async :refer [go go-loop >! <! onto-chan chan <!! >!! alt!]]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log])
   (:import [java.io RandomAccessFile]))
 
+(defn ^java.io.File file->temp-file
+  [file]
+  (fs/file config/tmp-dir (:filename file)))
+
+(defn ^java.io.File file->complete-file
+  [file]
+  (fs/file config/complete-dir (:filename file)))
+
 (defn cleanup
-  [cfg]
-  (fn [{:keys [nzb nzb-file]}]
-    (log/info "cleaning up temp files for" (str nzb-file))
-    (doseq [file    (:files nzb)
-            segment (-> file :segments vals)
-            :let [f (:downloaded segment)]
-            :when (and f (fs/exists? f))]
-      (fs/delete f))
-    (doseq [file (:files nzb)
-            :let [combined (:combined file)
-                  complete (fs/file (-> cfg :dirs :complete)
-                             (fs/base-name combined))]]
-      (log/info "moving" (str combined) "to" (str complete))
-      (fs/rename combined complete))))
+  [{:keys [nzb nzb-file]}]
+  (log/debug "cleaning up temp files for" (str nzb-file))
+  (doseq [[filename file]    (:files nzb)
+          segment (-> file :segments vals)
+          :let [f (fs/file (:downloaded-path segment))]
+          :when (and f (fs/exists? f))]
+    (fs/delete f))
+  (doseq [[filename file] (:files nzb)
+          :let [combined (file->temp-file file)
+                complete (file->complete-file file)]]
+    (log/debug "moving" (str combined) "to" (str complete))
+    (fs/rename combined complete)))
+
+(defn write-to-file
+  [file decoded]
+  (let [to-file (file->temp-file file)
+        begin   (-> decoded :keywords :part :begin dec)
+        end     (-> decoded :keywords :part :end dec)]
+    (with-open [output (RandomAccessFile. to-file "rw")]
+      (.seek output begin)
+      (.write output ^bytes (:bytes decoded)))))
 
 (defn decode
-  [handler cfg {:keys [decodes]}]
+  [handler {:keys [decodes]}]
   (fn [{:keys [nzb nzb-file] :as m}]
     (let [reply (chan)]
       (log/info "decoding segments for" (str nzb-file))
-      (doseq [[filename file] (sort (:files nzb))
-              [message-id segment] (:segments file)]
-        (onto-chan decodes {:reply   reply
-                            :nzb     nzb
-                            :file    file
-                            :segment segment}
-          false))
-      (log/info "waiting for decoding of segments for" (str nzb-file))
+      (go
+        (doseq [[filename file] (sort (:files nzb))
+                [message-id segment] (:segments file)]
+          (>! decodes {:reply   reply
+                       :nzb     nzb
+                       :file    file
+                       :segment segment})))
+      (log/infof "waiting for decoding of %d segments for %s"
+        (:total-segments nzb) (str nzb-file))
       (let [replies (async/take (:total-segments nzb) reply)]
         (loop []
-          (when-let [{:keys [filename segment decoded]} (<!! replies)]
-            (log/debug "writing segment" (:message-id segment))
-            (let [to-file (io/file (-> cfg :dirs :temp) filename)
-                  begin   (-> decoded :keywords :part :begin dec)
-                  end     (-> decoded :keywords :part :end dec)]
-              (with-open [output (RandomAccessFile. to-file "rw")]
-                (.seek output begin)
-                (.write output ^bytes (:bytes decoded))))
+          (when-let [{:keys [file segment decoded]} (<!! replies)]
+            (if decoded
+              (write-to-file file decoded)
+              (log/warn "no decoded section to write for" (:message-id segment)))
             (recur)))))
     (log/info "finished decoding" (str nzb-file))
     (handler m)))
 
 (defn download
-  [handler cfg {:keys [downloads]}]
+  [handler {:keys [downloads]}]
   (fn [{:keys [nzb nzb-file] :as m}]
     (let [reply (chan)]
-      (log/info "downloading segments for" (str nzb-file))
-      (doseq [[filename file] (sort (:files nzb))
-              [message-id segment] (:segments file)]
-        (onto-chan downloads {:reply   reply
-                              :nzb     nzb
-                              :file    file
-                              :segment segment}
-          false))
-      (log/info "waiting for downloads of segments for" (str nzb-file))
-      (let [nzb (loop [nzb     nzb
-                       replies (async/take (:total-segments nzb) reply)]
-                  (if-let [{:keys [file segment downloaded-path]} (<!! replies)]
-                    (let [filename (:filename file)]
-                      (log/debug "received reply for" filename "downloaded to" downloaded-path)
-                      (recur (assoc-in nzb
-                               [:files filename :segments (:message-id segment) :downloaded-path]
-                               downloaded-path) replies))
-                    nzb))]
+      (log/info "queueing segments for" (str nzb-file))
+      (go
+        (doseq [[filename file] (sort (:files nzb))
+                [message-id segment] (:segments file)]
+          (>! downloads {:reply   reply
+                          :nzb     nzb
+                          :file    file
+                          :segment segment})))
+      (log/infof "waiting for downloads of %d segments for %s"
+        (:total-segments nzb) (str nzb-file))
+      (let [replies (async/take (:total-segments nzb) reply)
+            nzb     (loop [nzb nzb]
+                      (if-let [{:keys [error downloaded-path segment file]} (<!! replies)]
+                        (recur (cond-> nzb
+                                 error
+                                 (assoc-in [:files (:filename file)
+                                            :segments (:message-id segment)
+                                            :error] error)
+                                 downloaded-path
+                                 (assoc-in [:files (:filename file)
+                                            :segments (:message-id segment)
+                                            :downloaded-path]
+                                   downloaded-path)))
+                        nzb))]
         (log/info "finished downloading" (str nzb-file))
         (handler (assoc m :nzb nzb))))))
 
 (defn parse
-  [handler cfg]
+  [handler]
   (fn [{:keys [nzb-file] :as m}]
-    (let [complete-dir (-> cfg :dirs :complete)
-          nzb          (assoc (nzb/parse nzb-file) :complete-dir complete-dir)]
-      (log/info "parsed" (str nzb-file))
+    (log/info "parsing" (str nzb-file))
+    (let [nzb (nzb/parse nzb-file)]
       (handler (assoc m :nzb nzb))
       (fs/delete nzb-file))))
 
@@ -90,12 +109,46 @@
   (fn [m]
     (try (handler m)
          (catch Exception e
-           (log/error e "error in pipeline")))))
+           (log/error e "unexpected error in pipeline")))))
 
 (defn build-pipeline
-  [cfg channels]
-  (-> (cleanup cfg)
-    (decode cfg channels)
-    (download cfg channels)
-    (parse cfg)
+  [channels]
+  (-> cleanup
+    (decode channels)
+    (download channels)
+    parse
     log-errors))
+
+;;
+
+(defn start-worker
+  [pipeline-fn {:keys [watcher shutdown]}]
+  (go-loop []
+    (alt!
+      watcher
+      ([f]
+         (log/info "got new file" (str f))
+         (pipeline-fn {:nzb-file f})
+         (recur))
+
+      shutdown
+      ([_]
+         (log/info "shutting down")))))
+
+(defrecord Pipeline [channels worker]
+  component/Lifecycle
+  (start [this]
+    (if-not worker
+      (let [pipeline-fn (build-pipeline channels)]
+        (log/info "starting")
+        (assoc this :worker (start-worker pipeline-fn channels)))
+      this))
+  (stop [this]
+    (if worker
+      (do (log/info "stopping")
+          (assoc this :worker nil))
+      this)))
+
+(defn new-pipeline
+  []
+  (map->Pipeline {}))

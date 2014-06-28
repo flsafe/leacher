@@ -1,42 +1,42 @@
 (ns leacher.downloader
   (:require [clojure.java.io :as io]
             [clojure.tools.logging :as log]
-            [clojure.core.async :as async :refer [>!! <!! thread chan put! close!]]
+            [clojure.core.async :as async :refer [>!! <!! thread chan put! close! alt!!]]
             [com.stuartsierra.component :as component]
             [me.raynes.fs :as fs]
             [leacher.nntp :as nntp]
-            [leacher.state :as state]
+            [leacher.config :as config]
             [leacher.settings :as settings]
-            [leacher.workers :as w]
             [leacher.utils :refer [loge]])
   (:import [java.net Socket]))
 
 ;; component
 
 (defn download-to-file
-  [cfg conn n {:keys [file segment] :as val}]
+  [conn n {:keys [file segment] :as work}]
   (let [filename    (:filename file)
         message-id  (:message-id segment)
-        result-file (fs/file (-> cfg :dirs :temp) message-id)]
+        result-file (fs/file config/tmp-dir message-id)]
     (if-not (fs/exists? result-file)
       (do (nntp/group conn (-> file :groups first))
           (let [resp (nntp/article conn message-id)]
             (log/debugf "worker[%d]: copying bytes to %s" n (str result-file))
             (io/copy (:bytes resp) result-file)))
       (log/infof "%s already exists" (str result-file)))
-    (assoc val :downloaded-path (fs/absolute-path result-file))))
+    (fs/absolute-path result-file)))
 
 (defn with-reconnecting
-  [settings body-fn]
+  [n settings body-fn]
   (let [retry (atom true)
         wait  (atom 1)]
     (while @retry
       (try
-        (let [user     (settings/get-setting settings :user)
-              password (settings/get-setting settings :password)
-              conn     (nntp/connect (settings/all settings))]
+        (let [nntp-settings (settings/all settings)
+              _             (log/infof "worker[%d] connecting with %s" n nntp-settings)
+              conn          (nntp/connect nntp-settings)]
+          (log/infof "worker[%d] connected OK" n)
           (with-open [sock ^Socket (:socket conn)]
-            (nntp/authenticate conn user password)
+            (nntp/authenticate conn nntp-settings)
             (body-fn conn)
             (reset! retry false)))
         (catch java.net.SocketException e
@@ -45,37 +45,47 @@
           (swap! wait #(min (* % 2) 30)))))))
 
 (defn start-worker
-  [n cfg settings downloads]
+  [settings {:keys [downloads shutdown]} n]
   (thread
-    (with-reconnecting settings
+    (with-reconnecting n settings
       (fn [conn]
         (loop []
-          (when-let [{:keys [segment reply] :as work} (<!! downloads)]
-            (>!! reply
-              (try
-                (download-to-file cfg conn n work)
-                (catch Exception e
-                  (log/error e "failed downloading" (:message-id segment))
-                  (assoc val :error e))))
-            (recur)))))))
+          (log/infof "worker[%d] waiting" n)
+          (alt!!
+            downloads
+            ([{:keys [segment reply] :as work}]
+               (when work
+                 (log/infof "worker[%d]: got segment %s" n (:message-id segment))
+                 (>!! reply
+                   (try
+                     (assoc work :downloaded-path (download-to-file conn n work))
+                     (catch Exception e
+                       (log/error e "failed downloading" (:message-id segment))
+                       (assoc work :error e))))
+                 (recur)))
+            shutdown
+            ([_]
+               (log/info "shutting down worker" n))))))))
 
 (defn start-workers
-  [cfg settings {:keys [downloads]}]
-  (map #(start-worker % cfg settings downloads)
-    (settings/get-setting settings :max-connections)))
+  [settings channels]
+  (doall
+    (map (partial start-worker settings channels)
+      (range (settings/get-setting settings :max-connections)))))
 
-(defrecord Downloader [cfg channels settings workers]
+(defrecord Downloader [channels settings workers]
   component/Lifecycle
   (start [this]
-    (if workers
-      this
-      (assoc this :workers (start-workers cfg settings channels))))
+    (if-not workers
+      (do (log/info "starting")
+          (assoc this :workers (start-workers settings channels)))
+      this))
   (stop [this]
     (if workers
-      (assoc this :workers nil)
+      (do (log/info "stopping")
+          (assoc this :workers nil))
       this)))
 
 (defn new-downloader
-  [cfg channels]
-  (map->Downloader {:cfg      cfg
-                    :channels channels}))
+  []
+  (map->Downloader {}))

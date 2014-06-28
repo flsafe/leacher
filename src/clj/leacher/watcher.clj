@@ -4,11 +4,12 @@
             [clojure.set :as set]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
-            [me.raynes.fs :as fs]))
+            [me.raynes.fs :as fs]
+            [leacher.config :as config]))
 
 (defn start-watching
-  [dir {:keys [watcher]} ctl]
-  (let [glob (str dir "/*.nzb")]
+  [{:keys [watcher shutdown]}]
+  (let [glob (str config/queue-dir "/*.nzb")]
     (go-loop [previous #{}]
       (alt!
         (async/timeout 1000)
@@ -21,30 +22,26 @@
                  (>! watcher f)))
              (recur current)))
 
-        ctl
+        shutdown
         ([_]
-           (log/debug "exiting"))))))
+           (log/info "shutting down"))))))
 
 ;; component
 
-(defrecord Watcher [dir channels ctl]
+(defrecord Watcher [channels worker]
   component/Lifecycle
   (start [this]
-    (if-not ctl
-      (let [ctl (chan)]
-        (start-watching dir channels ctl)
-        (assoc this :ctl ctl))
+    (if-not worker
+      (do (log/info "starting")
+          (assoc this :worker (start-watching channels)))
       this))
 
   (stop [this]
-    (if ctl
-      (do
-        (async/close! (:watcher channels))
-        (async/close! ctl)
-        (assoc this :ctl nil))
+    (if worker
+      (do (log/info "stopping")
+          (assoc this :worker nil))
       this)))
 
 (defn new-watcher
-  [dir channels]
-  (map->Watcher {:dir      dir
-                 :channels channels}))
+  []
+  (map->Watcher {}))

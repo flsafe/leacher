@@ -86,7 +86,7 @@
             (recur c)))))))
 
 (defn authenticate
-  [conn user password]
+  [conn {:keys [user password]}]
   (write conn (str "AUTHINFO USER " user))
   (let [resp (response conn)]
     (when (<= 300 (:code resp) 399)
