@@ -10,19 +10,35 @@
             [leacher.utils :refer [loge]])
   (:import [java.net Socket]))
 
-;; component
+(defn article-or-missing
+  [conn message-id]
+  (try
+    (nntp/article conn message-id)
+    (catch clojure.lang.ExceptionInfo e
+      (if (= 430 (-> e ex-data :code))
+        :missing
+        (throw e)))))
+
+(defn try-groups
+  [conn n result-file file segment]
+  (loop [groups (:groups file)]
+    (let [group      (first groups)
+          message-id (:message-id segment)]
+      (nntp/group conn (-> file :groups first))
+      (let [resp (article-or-missing conn message-id)]
+        (if (= :missing resp)
+          (do (log/infof "worker[%d]: failed to dl %s from %s, trying next group"
+                n message-id group)
+              (recur (next groups)))
+          (io/copy (:bytes resp) result-file))))))
 
 (defn download-to-file
   [conn n {:keys [file segment] :as work}]
-  (let [filename    (:filename file)
-        message-id  (:message-id segment)
+  (let [message-id  (:message-id segment)
         result-file (fs/file config/tmp-dir message-id)]
     (if-not (fs/exists? result-file)
-      (do (nntp/group conn (-> file :groups first))
-          (let [resp (nntp/article conn message-id)]
-            (log/debugf "worker[%d]: copying bytes to %s" n (str result-file))
-            (io/copy (:bytes resp) result-file)))
-      (log/infof "%s already exists" (str result-file)))
+      (try-groups conn n result-file file segment)
+      (log/infof "worker[%d]: %s already exists" n (str result-file)))
     (fs/absolute-path result-file)))
 
 (defn with-reconnecting
@@ -32,35 +48,40 @@
     (while @retry
       (try
         (let [nntp-settings (settings/all settings)
-              _             (log/infof "worker[%d] connecting with %s" n nntp-settings)
               conn          (nntp/connect nntp-settings)]
-          (log/infof "worker[%d] connected OK" n)
           (with-open [sock ^Socket (:socket conn)]
             (nntp/authenticate conn nntp-settings)
-            (body-fn conn)
+            (log/infof "worker[%d]: authenticated" n)
+            (try (body-fn conn)
+                 (catch Exception e
+                   (log/errorf e "worker[%d]: unexpected error, worker dead!" n)))
             (reset! retry false)))
         (catch java.net.SocketException e
-          (log/errorf e "connection error, retrying in %ds" @wait)
+          (log/errorf e "worker[%d]: connection error, retrying in %ds" n @wait)
           (Thread/sleep (* 1000 @wait))
           (swap! wait #(min (* % 2) 30)))))))
 
 (defn start-worker
   [settings {:keys [downloads shutdown]} n]
   (thread
+    (log/infof "worker[%d]: starting" n)
     (with-reconnecting n settings
       (fn [conn]
         (loop []
-          (log/infof "worker[%d] waiting" n)
+          (log/debugf "worker[%d] waiting" n)
           (alt!!
             downloads
             ([{:keys [segment reply] :as work}]
                (when work
-                 (log/infof "worker[%d]: got segment %s" n (:message-id segment))
+                 (log/debugf "worker[%d]: got segment %s" n (:message-id segment))
                  (>!! reply
                    (try
-                     (assoc work :downloaded-path (download-to-file conn n work))
+                     (log/debugf "worker[%d]: downloading %s" n (:message-id segment))
+                     (let [path (download-to-file conn n work)]
+                       (log/debugf "worker[%d]: finished %s" n (:message-id segment))
+                       (assoc work :downloaded-path path))
                      (catch Exception e
-                       (log/error e "failed downloading" (:message-id segment))
+                       (log/errorf e "worker[%d]: failed downloading %s" n (:message-id segment))
                        (assoc work :error e))))
                  (recur)))
             shutdown

@@ -15,7 +15,7 @@
 
 (def parsers
   {:port            #(Long. ^String %)
-   :ssl?            #(Boolean. ^String %)
+   :ssl?            #(= "true" %)
    :max-connections #(Long. ^String %)})
 
 (defn write-settings

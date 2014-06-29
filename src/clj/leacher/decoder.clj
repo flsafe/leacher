@@ -19,21 +19,17 @@
 
 (defn start-worker
   [{:keys [decodes shutdown]} n]
-  (log/info decodes)
-  (log/infof "worker[%d]: starting" n)
   (thread
     (loop []
-      (log/infof "worker[%d]: waiting for" n)
       (alt!!
         decodes
         ([{:keys [segment reply] :as work}]
            (when work
-             (log/infof "worker[%d]: got segment %s" n (:message-id segment))
              (>!! reply
                (try
                  (assoc work :decoded (decode-segment n segment))
                  (catch Exception e
-                   (log/errorf e "worker[%d]: failed downloading" n (:message-id segment))
+                   (log/errorf e "worker[%d]: failed decoding" n (:message-id segment))
                    (assoc work :error e))))
              (recur)))
         shutdown
