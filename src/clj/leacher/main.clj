@@ -3,7 +3,7 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log]
-            [clojure.core.async :refer [chan]]
+            [clojure.core.async :refer [chan close!]]
             [me.raynes.fs :as fs]
             [com.stuartsierra.component :as component]
             [leacher.utils :refer [on-shutdown]]
@@ -12,34 +12,47 @@
             [leacher.downloader :as downloader]
             [leacher.decoder :as decoder]
             [leacher.settings :as settings]
-            [leacher.watcher :as watcher])
+            [leacher.watcher :as watcher]
+            [leacher.ws :as ws])
   (:gen-class))
 
 ;; system
 
-(def components
-  [:settings
-   :pipeline
-   :downloader
-   :decoder
-   :watcher])
+(defrecord Channels [watcher downloads decodes events shutdown]
+  component/Lifecycle
+  (start [this]
+    (assoc this
+      :watcher (chan)
+      :downloads (chan)
+      :decodes (chan)
+      :events (chan)
+      :shutdown (chan)))
+  (stop [this]
+    (close! watcher)
+    (close! downloads)
+    (close! decodes)
+    (close! events)
+    (close! shutdown)
+    (assoc this
+      :watcher nil
+      :downloads nil
+      :decodes nil
+      :events nil
+      :shutdown nil)))
 
 (defrecord LeacherSystem []
   component/Lifecycle
   (start [this]
     (log/info "starting leacher")
-    (component/start-system this components))
+    (component/start-system this))
   (stop [this]
     (log/info "stopping leacher")
-    (component/stop-system this components)))
+    (component/stop-system this)))
 
 (defn new-leacher-system
   []
   (map->LeacherSystem
-    {:channels   {:watcher   (chan 20)
-                  :downloads (chan 500)
-                  :decodes   (chan 500)
-                  :shutdown  (chan)}
+    {:channels   (map->Channels {})
 
      :settings   (settings/new-settings)
 
@@ -53,7 +66,10 @@
                    [:channels :settings])
 
      :decoder    (component/using (decoder/new-decoder)
-                   [:channels])}))
+                   [:channels])
+
+     :ws         (component/using (ws/new-ws-api)
+                   [:channels :settings])}))
 
 ;; entry point
 

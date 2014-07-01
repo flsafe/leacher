@@ -5,7 +5,7 @@
             [leacher.config :as config]
             [me.raynes.fs :as fs]
             [com.stuartsierra.component :as component]
-            [clojure.core.async :as async :refer [go go-loop >! <! onto-chan chan <!! >!! alt!]]
+            [clojure.core.async :as async :refer [go go-loop >! <! onto-chan chan <!! >!! alt! put!]]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log])
   (:import [java.io RandomAccessFile]))
@@ -19,18 +19,17 @@
   (fs/file config/complete-dir (:filename file)))
 
 (defn cleanup
-  [{:keys [nzb nzb-file]}]
-  (log/debug "cleaning up temp files for" (str nzb-file))
-  (doseq [[filename file]    (:files nzb)
-          segment (-> file :segments vals)
+  [{:keys [filename] :as file} {:keys [events]}]
+  (put! events {:type :cleanup-starting :file file})
+  (doseq [segment (-> file :segments vals)
           :let [f (fs/file (:downloaded-path segment))]
           :when (and f (fs/exists? f))]
     (fs/delete f))
-  (doseq [[filename file] (:files nzb)
-          :let [combined (file->temp-file file)
-                complete (file->complete-file file)]]
+  (let [combined (file->temp-file file)
+        complete (file->complete-file file)]
     (log/debug "moving" (str combined) "to" (str complete))
-    (fs/rename combined complete)))
+    (fs/rename combined complete))
+  (put! events {:type :cleanup-complete :file file}))
 
 (defn write-to-file
   [file decoded]
@@ -42,111 +41,96 @@
       (.write output ^bytes (:bytes decoded)))))
 
 (defn decode
-  [handler {:keys [decodes]}]
-  (fn [{:keys [nzb nzb-file] :as m}]
-    (let [reply (chan)]
-      (log/info "decoding segments for" (str nzb-file))
-      (go
-        (doseq [[filename file] (sort (:files nzb))
-                [message-id segment] (:segments file)]
-          (>! decodes {:reply   reply
-                       :nzb     nzb
-                       :file    file
-                       :segment segment})))
-      (log/infof "waiting for decoding of %d segments for %s"
-        (:total-segments nzb) (str nzb-file))
-      (let [replies (async/take (:total-segments nzb) reply)]
-        (loop []
-          (when-let [{:keys [file segment decoded]} (<!! replies)]
-            (if decoded
-              (write-to-file file decoded)
-              (log/warn "no decoded section to write for" (:message-id segment)))
-            (recur)))))
-    (log/info "finished decoding" (str nzb-file))
-    (handler m)))
+  [{:keys [filename] :as file} {:keys [events decodes]}]
+  (put! events {:type :decode-starting :file file})
+  (let [reply (chan)]
+    (log/info "decoding segments for" filename)
+    (go
+      (doseq [[message-id segment] (:segments file)]
+        (>! decodes {:reply   reply
+                     :events  events
+                     :file    file
+                     :segment segment})))
+    (log/infof "waiting for decoding of %d segments for %s"
+      (:total-segments file) filename)
+    (let [replies (async/take (:total-segments file) reply)]
+      (loop []
+        (when-let [{:keys [file segment decoded]} (<!! replies)]
+          (if decoded
+            (write-to-file file decoded)
+            (log/warn "no decoded section to write for" (:message-id segment)))
+          (recur)))))
+  (put! events {:type :decode-complete :file file}))
 
 (defn download
-  [handler {:keys [downloads]}]
-  (fn [{:keys [nzb nzb-file] :as m}]
-    (let [reply (chan)]
-      (log/info "queueing segments for" (str nzb-file))
-      (go
-        (doseq [[filename file] (sort (:files nzb))
-                [message-id segment] (:segments file)]
-          (>! downloads {:reply   reply
-                          :nzb     nzb
-                          :file    file
-                          :segment segment})))
-      (log/infof "waiting for downloads of %d segments for %s"
-        (:total-segments nzb) (str nzb-file))
-      (let [replies (async/take (:total-segments nzb) reply)
-            nzb     (loop [nzb nzb]
-                      (if-let [{:keys [error downloaded-path segment file]} (<!! replies)]
-                        (recur (cond-> nzb
-                                 error
-                                 (assoc-in [:files (:filename file)
-                                            :segments (:message-id segment)
-                                            :error] error)
-                                 downloaded-path
-                                 (assoc-in [:files (:filename file)
-                                            :segments (:message-id segment)
-                                            :downloaded-path]
-                                   downloaded-path)))
-                        nzb))]
-        (log/info "finished downloading" (str nzb-file))
-        (handler (assoc m :nzb nzb))))))
+  [{:keys [filename] :as file} {:keys [events downloads]}]
+  (put! events {:type :download-starting :file file})
+  (let [reply (chan)]
+    (log/info "queueing segments for" filename)
+    (go
+      (doseq [[message-id segment] (:segments file)]
+        (>! downloads {:reply   reply
+                       :events  events
+                       :file    file
+                       :segment segment})))
+    (log/infof "waiting for downloads of %d segments for %s"
+      (:total-segments file) filename)
+    (let [replies (async/take (:total-segments file) reply)
+          result  (loop [result file]
+                    (if-let [{:keys [error downloaded-path segment]} (<!! replies)]
+                      (recur (cond-> result
+                               error
+                               (assoc-in [:segments (:message-id segment)
+                                          :error] error)
+                               downloaded-path
+                               (assoc-in [:segments (:message-id segment)
+                                          :downloaded-path]
+                                 downloaded-path)))
+                      result))]
+      (put! events {:type :download-complete :file file})
+      result)))
 
-(defn parse
-  [handler]
-  (fn [{:keys [nzb-file] :as m}]
-    (log/info "parsing" (str nzb-file))
-    (let [nzb (nzb/parse nzb-file)]
-      (handler (assoc m :nzb nzb))
-      (fs/delete nzb-file))))
-
-(defn log-errors
-  [handler]
-  (fn [m]
-    (try (handler m)
-         (catch Exception e
-           (log/error e "unexpected error in pipeline")))))
-
-(defn build-pipeline
-  [channels]
-  (-> cleanup
-    (decode channels)
-    (download channels)
-    parse
-    log-errors))
+(defn process-file
+  [f {:keys [events] :as channels}]
+  (doseq [[_ file] (-> (nzb/parse f) :files sort)
+          :when (not (fs/exists? (file->complete-file file)))]
+    (let [file (download file channels)]
+      (decode file channels)
+      (cleanup file channels))))
 
 ;;
 
 (defn start-worker
-  [pipeline-fn {:keys [watcher shutdown]}]
+  [{:keys [watcher shutdown] :as channels} n]
   (go-loop []
     (alt!
-      watcher
-      ([f]
-         (log/info "got new file" (str f))
-         (pipeline-fn {:nzb-file f})
-         (recur))
-
       shutdown
       ([_]
-         (log/info "shutting down")))))
+         (log/infof "worker[%d]: shutting down" n))
 
-(defrecord Pipeline [channels worker]
+      watcher
+      ([f]
+         (when f
+           (log/infof "worker[%d]: got new file %s" n (str f))
+           (process-file f channels)
+           (recur)))
+
+      :priority true)))
+
+(defrecord Pipeline [channels workers]
   component/Lifecycle
   (start [this]
-    (if-not worker
-      (let [pipeline-fn (build-pipeline channels)]
+    (if-not workers
+      (let [workers (doall
+                      (mapv (partial start-worker channels)
+                        (range 5)))]
         (log/info "starting")
-        (assoc this :worker (start-worker pipeline-fn channels)))
+        (assoc this :workers workers))
       this))
   (stop [this]
-    (if worker
+    (if workers
       (do (log/info "stopping")
-          (assoc this :worker nil))
+          (assoc this :workers nil))
       this)))
 
 (defn new-pipeline

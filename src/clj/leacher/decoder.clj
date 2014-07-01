@@ -22,6 +22,10 @@
   (thread
     (loop []
       (alt!!
+        shutdown
+        ([_]
+           (log/infof "worker[%d]: shutting down" n))
+
         decodes
         ([{:keys [segment reply] :as work}]
            (when work
@@ -32,9 +36,8 @@
                    (log/errorf e "worker[%d]: failed decoding" n (:message-id segment))
                    (assoc work :error e))))
              (recur)))
-        shutdown
-        ([_]
-           (log/infof "worker[%d]: shutting down" n))))))
+
+        :priority true))))
 
 (defn start-workers
   [channels]

@@ -12,6 +12,10 @@
   (let [glob (str config/queue-dir "/*.nzb")]
     (go-loop [previous #{}]
       (alt!
+        shutdown
+        ([_]
+           (log/info "shutting down"))
+
         (async/timeout 1000)
         ([_]
            (let [current   (set (fs/glob glob))
@@ -22,9 +26,7 @@
                  (>! watcher f)))
              (recur current)))
 
-        shutdown
-        ([_]
-           (log/info "shutting down"))))))
+        :priority true))))
 
 ;; component
 

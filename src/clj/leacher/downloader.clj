@@ -22,15 +22,16 @@
 (defn try-groups
   [conn n result-file file segment]
   (loop [groups (:groups file)]
-    (let [group      (first groups)
-          message-id (:message-id segment)]
-      (nntp/group conn (-> file :groups first))
-      (let [resp (article-or-missing conn message-id)]
-        (if (= :missing resp)
-          (do (log/infof "worker[%d]: failed to dl %s from %s, trying next group"
-                n message-id group)
-              (recur (next groups)))
-          (io/copy (:bytes resp) result-file))))))
+    (when groups
+      (let [group      (first groups)
+            message-id (:message-id segment)]
+        (nntp/group conn (-> file :groups first))
+        (let [resp (article-or-missing conn message-id)]
+          (if (= :missing resp)
+            (do (log/infof "worker[%d]: failed to dl %s from %s, trying next group"
+                  n message-id group)
+                (recur (next groups)))
+            (io/copy (:bytes resp) result-file)))))))
 
 (defn download-to-file
   [conn n {:keys [file segment] :as work}]
@@ -70,6 +71,10 @@
         (loop []
           (log/debugf "worker[%d] waiting" n)
           (alt!!
+            shutdown
+            ([_]
+               (log/info "shutting down worker" n))
+
             downloads
             ([{:keys [segment reply] :as work}]
                (when work
@@ -84,9 +89,8 @@
                        (log/errorf e "worker[%d]: failed downloading %s" n (:message-id segment))
                        (assoc work :error e))))
                  (recur)))
-            shutdown
-            ([_]
-               (log/info "shutting down worker" n))))))))
+
+            :priority true))))))
 
 (defn start-workers
   [settings channels]
