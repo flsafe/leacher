@@ -21,42 +21,9 @@
 
 (def app-state (atom {:websocket :disconnected
                       :settings  {}
-                      :downloads {}
-                      :workers   {}}))
+                      :files     {}}))
 
 ;; ws handling
-
-(defn deep-merge-with
-  [f & maps]
-  (apply
-   (fn m [& maps]
-     (if (every? map? maps)
-       (apply merge-with m maps)
-       (apply f maps)))
-   maps))
-
-(def deep-merge (partial deep-merge-with (fn [& ms] (last ms))))
-
-(defn apply-removals
-  [m deltas]
-  (reduce (fn [res korks]
-            (if (vector? korks)
-              (let [[k attrs] korks
-                    val     (apply-removals (get res k) attrs)]
-                (if (empty? val)
-                  (dissoc res k)
-                  (assoc res k val)))
-              (dissoc res korks))) m deltas))
-
-(defn apply-deltas
-  [m deltas]
-  (let [rm (:remove deltas)
-        md (:modify deltas)
-        res (apply-removals m rm)
-        res (if md
-              (deep-merge res md)
-              res)]
-    res))
 
 (defn ws-chan
   []
@@ -80,54 +47,85 @@
       (when-let [m (<! in)]
         (.send ws (pr-str m))
         (recur)))
-    (.open ws (str "ws://localhost:" (-> @config :ws-server :port) "/ws"))
+    (.open ws (str "ws://localhost:8091/ws"))
     {:in in :out out}))
 
-(defmulti handle-message :type)
+(defn handle-update
+  [state {:keys [type file] :as data}]
+  (condp = type
+    :download-starting
+    (swap! state assoc-in [:files (:filename file)]
+      (-> file
+        (assoc :status :downloading
+               :downloaded-segments 0
+               :decoded-segments 0
+               :download-failed-segments 0
+               :decode-failed-segments 0
+               :errors [])
+        (dissoc :segments)))
 
-(defmethod handle-message :initial
-  [{:keys [data]}]
-  (swap! app-state merge data))
+    :download-complete
+    (swap! state assoc-in [:files (:filename file) :status] :download-complete)
 
-(defmethod handle-message :deltas
-  [{:keys [data]}]
-  (swap! app-state apply-deltas data))
+    :decode-starting
+    (swap! state assoc-in [:files (:filename file) :status] :decoding)
 
-(defmethod handle-message :settings-test-result
-  [status]
-  (swap! app-state assoc :settings-status status))
+    :decode-complete
+    (swap! state assoc-in [:files (:filename file) :status] :decode-complete)
 
-(defmulti handle-event :type)
+    :cleanup-starting
+    (swap! state assoc-in [:files (:filename file) :status] :cleaning)
 
-(defmethod handle-event :opened
-  [_]
-  (swap! app-state assoc :websocket :connected))
+    :cleanup-complete
+    (swap! state assoc-in [:files (:filename file) :status] :completed)
 
-(defmethod handle-event :closed
-  [_]
-  (swap! app-state assoc :websocket :disconnected))
+    :segment-download-complete
+    (swap! state update-in [:files (:filename file) :downloaded-segments] inc)
 
-(defmethod handle-event :error
-  [_]
-  (swap! app-state assoc :websocket :error))
+    :segment-download-failed
+    (swap! state update-in [:files (:filename file)]
+      (fn [m] (-> m
+               (update-in [:download-failed-segments] inc)
+               (update-in [:errors] conj (:message data)))))
 
-(defmethod handle-event :default
-  [{:keys [type]}]
-  (println "unhandled ws event" (name type)))
+    :segment-decode-complete
+    (swap! state update-in [:files (:filename file) :decoded-segments] inc)
 
-(defmethod handle-event :message
-  [{:keys [data]}]
-  (handle-message data))
+    :segment-decode-failed
+    (swap! state update-in [:files (:filename file)]
+      (fn [m] (-> m
+               (update-in [:decode-failed-segments] inc)
+               (update-in [:errors] conj (:message data)))))))
+
+(defn handle-event
+  [{:keys [type data] :as e}]
+  (condp = type
+    :opened
+    (swap! app-state assoc :websocket :connected)
+
+    :closed
+    (swap! app-state assoc :websocket :disconnected)
+
+    :error
+    (swap! app-state assoc :websocket :error)
+
+    :message
+    (condp = (:type data)
+      :initial
+      (swap! app-state merge (:data data))
+
+      :update
+      (handle-update app-state (:data data)))))
 
 ;; page elements
 
 (def status->cls
-  {:downloading       :warning
-   :completed         :success
-   :error             :danger
-   :failed            :danger
-   :decoding          :primary
-   :cleaning          :info})
+  {:downloading :warning
+   :completed   :success
+   :error       :danger
+   :failed      :danger
+   :decoding    :primary
+   :cleaning    :info})
 
 (defn file->glyphicon
   [filename]
@@ -160,114 +158,6 @@
   (dom/span #js {:className "badge"}
     text))
 
-(defn or-now
-  [t]
-  (if t
-    (.moment js/window t)
-    (js/moment)))
-
-(defn time-diff
-  [from to]
-  (let [start    (or-now from)
-        finish   (or-now to)
-        duration (.duration js/moment (.subtract finish start))
-        seconds  (.asSeconds duration)
-        human    (if (< seconds 60)
-                   (str seconds " seconds")
-                   (.humanize duration))]
-    {:start    start
-     :finish   finish
-     :seconds  seconds
-     :duration duration
-     :human    human}))
-
-(defn download-item
-  [[filename file] owner]
-  (let [completed?       (= :completed (:status file))
-        downloading-time (time-diff (:downloading-started-at file)
-                           (:downloading-finished-at file))
-        total-time       (time-diff (:downloading-started-at file)
-                           (:cleaning-finished-at file))
-        bytes-received   (:bytes-received file)
-        total-bytes      (:total-bytes file)
-        rate             (/ bytes-received (:seconds downloading-time))
-        decoding-time    (time-diff (:decoding-started-at file)
-                           (:decoding-finished-at file))
-        percent-complete (int (* 100 (/ bytes-received total-bytes)))]
-    (dom/li #js {:className (if (:cancelled file) "cancelled")}
-      (dom/div #js {:className "icon pull-left"}
-        (when-let [s (file->glyphicon filename)]
-          (dom/span #js {:className (str "glyphicon glyphicon-" s)})))
-      (dom/div #js {:className "pull-left"}
-        (dom/span #js {:className "filename"}
-          filename)
-        (dom/div nil
-          (dom/span #js {:className "bytes"}
-            (->bytes-display bytes-received) " of "
-            (->bytes-display total-bytes))
-          " - "
-          (dom/span #js {:className "rate"}
-            (->bytes-display rate) "/sec")
-          ", "
-          (dom/span #js {:className "segments"}
-            (get file :segments-completed 0) "/"
-            (:total-segments file))
-          " segments"
-          (when completed?
-            (dom/span #js {:className "timing"}
-              ", downloaded in "
-              (dom/span #js {:className "data"}
-                (:human downloading-time))
-              ", decoded in "
-              (dom/span #js {:className "data"}
-                (:human decoding-time))))))
-
-      (dom/div #js {:className "status pull-right"}
-        (label (get status->cls (:status file) :default)
-          (-> file :status name)
-          :title (:error file)))
-
-      (when (= :downloading (:status file))
-        (dom/div #js {:className "progress"}
-          (dom/div #js {:className "progress-bar"
-                        :style     #js {:width (str percent-complete "%")}})))
-      (dom/div #js {:className "clearfix"}))))
-
-(defn downloads-section
-  [downloads ws-in]
-  (dom/div #js {:className "row"}
-    (dom/div #js {:className "header col-md-12"}
-      (dom/h3 #js {:className "pull-left"}
-        "Downloads "
-        (dom/span #js {:className "small"}
-          "All your illegal files"))
-      (dom/button #js {:className "btn btn-xs pull-right"
-                       :onClick (fn [_] (put! ws-in {:type :clear-completed}))}
-        "Clear completed")
-      (dom/button #js {:className "btn btn-xs btn-danger pull-right"
-                       :onClick (fn [_] (put! ws-in {:type :cancel-all}))}
-        "Cancel all")
-
-      (dom/div #js {:className "clearfix"})
-      (if (zero? (count downloads))
-        (dom/p nil "No downloads!")
-        (apply dom/ul #js {:id "downloads"
-                           :className "list-unstyled"}
-          (om/build-all download-item downloads))))))
-
-(defn worker-item
-  [[_ w] owner]
-  (dom/li #js {:className (-> w :status name)
-               :title     (:message w)}))
-
-(defn workers-section
-  [workers]
-  (dom/div #js {:className "col-md-12"}
-    (apply dom/ul #js {:className "list-unstyled pull-left"
-                       :id        "workers"}
-      (om/build-all worker-item workers))
-    (dom/div #js {:className "clearfix"})))
-
 (defn connection-status
   [status]
   (dom/div #js {:className "col-md-12"}
@@ -275,76 +165,94 @@
                   :className (str "pull-right " (name status))}
       (name status))))
 
-(defn handle-change
-  [e key settings value-fn & [parse-fn]]
-  (let [parse-fn (or parse-fn identity)
-        value    (parse-fn (value-fn (.. e -target)))]
-    (om/update! settings key value)))
 
-(defn input-with-label
-  [title key settings & [attrs]]
-  (let [wrapper-class (get attrs :wrapper-class "form-group")
-        parse-fn      (get attrs :parse-fn identity)
-        value-fn      (get attrs :value-fn #(.. % -value))
-        attrs         (dissoc attrs :wrapper-class :parse-fn :value-fn)]
-   (dom/div #js {:className wrapper-class}
-     (dom/label nil
-       title)
-     (dom/input
-       (clj->js (merge {:type      "text"
-                        :className "form-control input-sm"
-                        :value     (get settings key)
-                        :onChange  #(handle-change % key settings value-fn parse-fn)}
-                  attrs))))))
 
-(defn checkbox-with-label
-  [title key settings & [attrs]]
-  (let [attrs (dissoc attrs :wrapper-class :parse-fn :value-fn)]
-   (dom/div #js {:className "checkbox"}
-     (dom/label nil
-       title)
-     (dom/input
-       (clj->js
-         (merge {:type      "checkbox"
-                 :checked   (get settings key)
-                 :onChange  (fn [e] (handle-change e key settings #(.-checked %)))}
-           attrs))))))
+;; (dom/div #js {:className "status pull-right"}
+;;   (label (get status->cls (:status file) :default)
+;;     (-> file :status name)
+;;     :title (:error file)))
 
-(defn parse-int
-  [s]
-  (.parseInt js/window s))
+;; (when (= :downloading (:status file))
+;;   (dom/div #js {:className "progress"}
+;;     (dom/div #js {:className "progress-bar"
+;;                   :style     #js {:width (str percent-complete "%")}})))
 
-(defn settings-editor
-  [ws-msgs settings settings-status]
-  (dom/div #js {:className "settings-editor col-xs-2"}
-    (input-with-label "Host" :host settings)
-    (input-with-label "Port" :port settings {:parse-fn parse-int})
-    (input-with-label "User" :user settings)
-    (input-with-label "Password" :password settings {:type "password"})
-    (checkbox-with-label "SSL" :ssl?
-      settings {:wrapper-class "checkbox"
-                :type          "checkbox"
-                :value-fn      #(.. % -checked)})
-    (input-with-label "Max. Connections"
-      :max-connections settings
-      {:parse-fn parse-int})
-    (dom/button #js {:className "btn btn-xs btn-success"
-                     :onClick   #(put! ws-msgs {:type     :settings-update
-                                                :settings @settings})}
-      "Save")
-    (dom/button #js {:className "btn btn-xs btn-warning"
-                     :onClick   #(put! ws-msgs {:type     :settings-test
-                                                :settings @settings})}
-      "Test "
-      (let [icon-class (condp = (:result settings-status)
-                         :success "ok"
-                         :error "remove"
-                         "question")]
-        (dom/span #js {:className (str "status glyphicon glyphicon-" icon-class "-sign")}
-          nil)))))
+;; (dom/div #js {:className "clearfix"})
+
+(defn file-row
+  [[filename file] _]
+  (reify
+    om/IRender
+    (render [_]
+      (let [success? (and (zero? (:decode-failed-segments file))
+                       (zero? (:download-failed-segments file)))
+            status (cond
+                     (not success?)
+                     "bg-danger"
+
+                     (= :downloading (:status file))
+                     "bg-warning"
+
+                     (= :decoding (:status file))
+                     "bg-info"
+
+                     :else
+                     "bg-success")]
+        (dom/li #js {:className status
+                     :title filename}
+          (condp = (:status file)
+            :downloading
+            (str (:downloaded-segments file) "/" (:total-segments file))
+
+            :decoding
+            (str (:decoded-segments file) "/" (:total-segments file))
+
+            :completed
+            (if success?
+              (dom/span #js {:className "glyphicon glyphicon-ok"})
+              (dom/span #js {:title (str (:downloaded-segments file) ", "
+                                      (:decoded-segments file))}
+                (:decode-failed-segments file) "! "
+                (:download-failed-segments file) "!"))
+            )
+
+         ;; (dom/div #js {:className "icon pull-left"}
+         ;;   (when-let [s (file->glyphicon filename)]
+         ;;     (dom/span #js {:className (str "glyphicon glyphicon-" s)})))
+
+         ;; (dom/div #js {:className "pull-left"}
+         ;;   (dom/span #js {:className "filename"}
+         ;;     filename)
+
+         ;;   (dom/div nil
+         ;;     (dom/span #js {:className "segments"}
+         ;;       (get file :downloaded-segments) "/"
+         ;;       (:total-segments file))
+         ;;     " segments downloaded, "
+         ;;     (dom/span #js {:className "segments"}
+         ;;       (get file :decoded-segments) "/"
+         ;;       (:total-segments file))
+         ;;     " segments decoded"))
+
+         ;; (dom/div #js {:className "status pull-right"}
+         ;;   (label (get status->cls (:status file) :default)
+         ;;     (-> file :status name)
+         ;;     :title (:error file)))
+         (dom/div #js {:className "clearfix"}))))))
+
+(defn files-section
+  [files _]
+  (reify
+    om/IRender
+    (render [_]
+      (dom/div #js {:className "col-md-12"}
+        (dom/div #js {:id "files"}
+          (apply dom/ul #js {:id "files"
+                             :className "list-unstyled"}
+            (om/build-all file-row (sort files))))))))
 
 (defn leacher-app
-  [{:keys [downloads settings settings-status workers websocket] :as app} owner]
+  [{:keys [files settings websocket] :as app} owner]
   (reify
     om/IInitState
     (init-state [_]
@@ -358,24 +266,17 @@
         (go-loop []
           (when-let [e (<! out)]
             (handle-event e)
-            (recur)))
-        (go-loop []
-          (when-let [msg (<! (om/get-state owner :ws-msgs))]
-            (>! in msg)
             (recur)))))
 
     om/IRenderState
     (render-state [this {:keys [ws ws-msgs]}]
       (dom/div #js {:className "container-fluid"}
-        (settings-editor ws-msgs settings settings-status)
-        (dom/div #js {:className "col-xs-10"}
+        (dom/div #js {:className "col-xs-12"}
           (dom/div #js {:className "row"}
-            (connection-status websocket)
-            (workers-section workers))
-          (downloads-section downloads (:in ws)))))))
+            (connection-status websocket))
+          (om/build files-section files))))))
 
 (defn init
-  [cfg]
-  (reset! config (read-string cfg))
+  []
   (om/root leacher-app app-state
     {:target (.getElementById js/document "app")}))

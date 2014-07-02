@@ -42,6 +42,9 @@
       (log/infof "worker[%d]: %s already exists" n (str result-file)))
     (fs/absolute-path result-file)))
 
+;; TODO: write a reconnecting connection thing that auto-retries when
+;; encountering connection errors
+
 (defn with-reconnecting
   [n settings body-fn]
   (let [retry (atom true)
@@ -76,7 +79,7 @@
                (log/info "shutting down worker" n))
 
             downloads
-            ([{:keys [segment reply] :as work}]
+            ([{:keys [file segment reply events] :as work}]
                (when work
                  (log/debugf "worker[%d]: got segment %s" n (:message-id segment))
                  (>!! reply
@@ -84,9 +87,14 @@
                      (log/debugf "worker[%d]: downloading %s" n (:message-id segment))
                      (let [path (download-to-file conn n work)]
                        (log/debugf "worker[%d]: finished %s" n (:message-id segment))
+                       (put! events {:type :segment-download-complete
+                                     :file file})
                        (assoc work :downloaded-path path))
                      (catch Exception e
                        (log/errorf e "worker[%d]: failed downloading %s" n (:message-id segment))
+                       (put! events {:type    :segment-download-failed
+                                     :file    file
+                                     :message (.getMessage e)})
                        (assoc work :error e))))
                  (recur)))
 

@@ -27,13 +27,19 @@
            (log/infof "worker[%d]: shutting down" n))
 
         decodes
-        ([{:keys [segment reply] :as work}]
+        ([{:keys [segment reply file events] :as work}]
            (when work
              (>!! reply
                (try
-                 (assoc work :decoded (decode-segment n segment))
+                 (let [decoded (decode-segment n segment)]
+                   (put! events {:type :segment-decode-complete
+                                 :file file})
+                   (assoc work :decoded decoded))
                  (catch Exception e
                    (log/errorf e "worker[%d]: failed decoding" n (:message-id segment))
+                   (put! events {:type    :segment-decode-failed
+                                 :file    file
+                                 :message (.getMessage e)})
                    (assoc work :error e))))
              (recur)))
 

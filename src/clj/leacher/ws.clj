@@ -11,21 +11,58 @@
 
 ;; events
 
-(defn state-event
-  [data]
+(defn initial-event
+  [files settings]
   (pr-str {:type :initial
-           :data data}))
+           :data {:files    files
+                  :settings settings}}))
 
-(defmulti merge-state (fn [_ e] (:type e)))
+(defn merge-state
+  [state {:keys [type file] :as data}]
+  (condp = type
+    :download-starting
+    (swap! state assoc (:filename file)
+      (-> file
+        (assoc :status :downloading
+               :downloaded-segments 0
+               :decoded-segments 0
+               :download-failed-segments 0
+               :decode-failed-segments 0
+               :errors [])
+        (dissoc :segments)))
 
-(defmethod merge-state :download-starting
-  [state {:keys [file]}]
-  (swap! state assoc (:filename file)
-    (assoc file :status :downloading)))
+    :download-complete
+    (swap! state assoc-in [(:filename file) :status] :download-complete)
 
-(defmethod merge-state :default
-  [_ e]
-  (log/info "unhandled event" (:type e)))
+    :decode-starting
+    (swap! state assoc-in [(:filename file) :status] :decoding)
+
+    :decode-complete
+    (swap! state assoc-in [(:filename file) :status] :decode-complete)
+
+    :cleanup-starting
+    (swap! state assoc-in [(:filename file) :status] :cleaning)
+
+    :cleanup-complete
+    (swap! state assoc-in [(:filename file) :status] :completed)
+
+    :segment-download-complete
+    (swap! state update-in [(:filename file) :downloaded-segments] inc)
+
+    :segment-download-failed
+    (swap! state update-in [(:filename file)]
+      (fn [m] (-> m
+               (update-in [:download-failed-segments] inc)
+               (update-in [:errors] conj (:message data)))))
+
+    :segment-decode-complete
+    (swap! state update-in [(:filename file) :decoded-segments] inc)
+
+    :segment-decode-failed
+    (swap! state update-in [(:filename file)]
+      (fn [m] (-> m
+               (update-in [:decode-failed-segments] inc)
+               (update-in [:errors] conj (:message data)))))))
 
 (defn start-publisher
   [clients state {:keys [events shutdown]}]
@@ -41,33 +78,22 @@
            (when event
              (try
                (merge-state state event)
-               (doseq [ch @clients]
-                 (send! ch event))
+               (let [ws-event (pr-str {:type :update
+                                       :data event})]
+                (doseq [ch @clients]
+                  (send! ch ws-event)))
                (catch Exception e
                  (log/error e "failed sending to client")))
              (recur)))
 
         :priority true))))
 
-(defn settings-update
-  [settings new-settings]
-  (try
-    (log/info "updating settings to" new-settings)
-    (stg/merge-with! settings new-settings)
-    (catch Exception e
-      (log/error e "failed updating settings"))))
-
 (defn ws-handler
   [clients state settings req]
   (with-channel req channel
     (log/info "client connected from" (:remote-addr req))
     (swap! clients conj channel)
-    (send! channel (state-event @state))
-    (on-receive channel
-      (fn [data]
-        (let [msg (edn/read-string data)]
-          (case (:type msg)
-            :settings-update (settings-update settings (:settings msg))))))
+    (send! channel (initial-event @state (stg/all settings)))
 
     (on-close channel
       (fn [status]

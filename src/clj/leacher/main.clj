@@ -13,7 +13,8 @@
             [leacher.decoder :as decoder]
             [leacher.settings :as settings]
             [leacher.watcher :as watcher]
-            [leacher.ws :as ws])
+            [leacher.ws :as ws]
+            [leacher.ui.http :as http])
   (:gen-class))
 
 ;; system
@@ -69,7 +70,9 @@
                    [:channels])
 
      :ws         (component/using (ws/new-ws-api)
-                   [:channels :settings])}))
+                   [:channels :settings])
+
+     :http       (http/new-http-server)}))
 
 ;; entry point
 

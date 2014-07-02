@@ -10,7 +10,7 @@
             [ring.middleware.stacktrace :as ring-stacktrace]))
 
 (defn index-page
-  [cfg]
+  []
   (html5
    [:head
     (include-css
@@ -23,15 +23,15 @@
       "js/moment.js"
       "js/app.js")
     [:script
-     "leacher.ui.app.init('" (pr-str cfg) "');"]]))
+     "leacher.ui.app.init();"]]))
 
 (defn build-routes
-  [cfg]
-  (GET "/" [] (index-page cfg)))
+  []
+  (GET "/" [] (index-page)))
 
 (defn build-app
-  [cfg]
-  (-> (build-routes cfg)
+  []
+  (-> (build-routes)
       site
       (ring-resource/wrap-resource "public")
       ring-stacktrace/wrap-stacktrace
@@ -39,12 +39,12 @@
 
 ;; component
 
-(defrecord HttpServer [cfg shutdown-fn]
+(defrecord HttpServer [shutdown-fn]
   component/Lifecycle
   (start [this]
     (if shutdown-fn
       this
-      (let [shutdown-fn (server/run-server (build-app cfg) (:http-server cfg))]
+      (let [shutdown-fn (server/run-server (build-app) {})]
         (log/info "starting")
         (assoc this :shutdown-fn shutdown-fn))))
   (stop [this]
@@ -56,5 +56,5 @@
         (assoc this :shutdown-fn nil)))))
 
 (defn new-http-server
-  [cfg]
-  (map->HttpServer {:cfg cfg}))
+  []
+  (map->HttpServer {}))

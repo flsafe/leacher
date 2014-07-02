@@ -34,40 +34,45 @@ ul#workers li {
 .downloading { background: #5cb85c; }
 .error       { background: #d9534f; }
 
-#downloads {
+#files {
     font-size: small;
 }
 
-#downloads li {
-    position: relative;
-    border-bottom: 1px solid #ccc;
-    padding: 5px 0;
+#files li {
+    width: 100px;
+    height: 100px;
+    line-height: 100px;
+    font-size: 25px;
+    float: left;
+    margin: 0 1px 1px 0;
+    text-align: center;
+    color: #999;
 }
 
-#downloads li.cancelled span {
-    text-decoration: line-through;
+#files .glyphicon-ok {
+    color: #bfd0b8;
 }
 
-#downloads .icon {
+#files .icon {
     font-size: 2em;
     margin-right: 5px;
 }
 
-#downloads .filename {
+#files .filename {
     color: #333;
     font-weight: bold;
 }
 
-#downloads .bytes, #downloads .rate, #downloads .timing, #downloads .segments {
+#files .bytes, #files .rate, #files .timing, #files .segments {
     color: #666;
     font-style: italic;
 }
 
-#downloads .status {
+#files .status {
 
 }
 
-#downloads .progress {
+#files .progress {
     width: 200px;
     position: absolute;
     margin: 0;
