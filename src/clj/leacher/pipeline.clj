@@ -20,7 +20,9 @@
 
 (defn cleanup
   [{:keys [filename] :as file} {:keys [events]}]
-  (put! events {:type :cleanup-starting :file file})
+  (put! events {:type     :file-status
+                :status   :cleanup-starting
+                :filename filename})
   (doseq [segment (-> file :segments vals)
           :let [f (fs/file (:downloaded-path segment))]
           :when (and f (fs/exists? f))]
@@ -29,7 +31,9 @@
         complete (file->complete-file file)]
     (log/debug "moving" (str combined) "to" (str complete))
     (fs/rename combined complete))
-  (put! events {:type :cleanup-complete :file file}))
+  (put! events {:type     :file-status
+                :status   :completed
+                :filename filename}))
 
 (defn write-to-file
   [file decoded]
@@ -42,7 +46,9 @@
 
 (defn decode
   [{:keys [filename] :as file} {:keys [events decodes]}]
-  (put! events {:type :decode-starting :file file})
+  (put! events {:type     :file-status
+                :status   :decoding
+                :filename filename})
   (let [reply (chan)]
     (log/info "decoding segments for" filename)
     (go
@@ -60,11 +66,15 @@
             (write-to-file file decoded)
             (log/warn "no decoded section to write for" (:message-id segment)))
           (recur)))))
-  (put! events {:type :decode-complete :file file}))
+  (put! events {:type     :file-status
+                :status   :decode-complete
+                :filename filename}))
 
 (defn download
   [{:keys [filename] :as file} {:keys [events downloads]}]
-  (put! events {:type :download-starting :file file})
+  (put! events {:type     :file-status
+                :status   :downloading
+                :filename filename})
   (let [reply (chan)]
     (log/info "queueing segments for" filename)
     (go
@@ -87,50 +97,85 @@
                                           :downloaded-path]
                                  downloaded-path)))
                       result))]
-      (put! events {:type :download-complete :file file})
+      (put! events {:type     :file-status
+                    :status   :download-complete
+                    :filename filename})
       result)))
 
 (defn process-file
-  [f {:keys [events] :as channels}]
-  (doseq [[_ file] (-> (nzb/parse f) :files sort)
-          :when (not (fs/exists? (file->complete-file file)))]
-    (let [file (download file channels)]
-      (decode file channels)
-      (cleanup file channels))))
-
-;;
+  [file {:keys [events] :as channels}]
+  (let [file (download file channels)]
+    (decode file channels)
+    (cleanup file channels)))
 
 (defn start-worker
-  [{:keys [watcher shutdown] :as channels} n]
+  [{:keys [watcher shutdown] :as channels} work-ch n]
   (go-loop []
     (alt!
       shutdown
-      ([_]
-         (log/infof "worker[%d]: shutting down" n))
+      ([_] (log/infof "worker[%d]: shutting down" n))
 
-      watcher
-      ([f]
-         (when f
-           (log/infof "worker[%d]: got new file %s" n (str f))
-           (process-file f channels)
+      work-ch
+      ([file]
+         (when file
+           (try
+             (process-file file channels)
+             (catch Exception e
+               (log/error e "failed processing" (:filename file))))
            (recur)))
 
       :priority true)))
 
-(defrecord Pipeline [channels workers]
+(defn start-listener
+  [{:keys [watcher shutdown events] :as channels} work-ch]
+  (go-loop []
+    (alt!
+      shutdown
+      ([_]
+         (log/info "shutting down"))
+
+      watcher
+      ([f]
+         (when f
+           (try
+             (log/info "got new file" (str f))
+             (let [files (for [[_ file] (-> (nzb/parse f) :files sort)
+                               :when (not (fs/exists? (file->complete-file file)))]
+                           file)]
+               (doseq [file files]
+                 (put! events {:type :download-pending
+                               :file file}))
+               (doseq [file files]
+                 (>! work-ch file)))
+                (catch Exception e
+                  (log/error e "failed processing" (str f))))
+           (recur)))
+
+      :priority true)))
+
+;;
+
+(defrecord Pipeline [channels workers listener work-ch]
   component/Lifecycle
   (start [this]
     (if-not workers
-      (let [workers (doall
-                      (mapv (partial start-worker channels)
-                        (range 5)))]
+      (let [work-ch  (chan)
+            listener (start-listener channels work-ch)
+            workers  (doall (mapv (partial start-worker channels work-ch) (range 5)))]
         (log/info "starting")
-        (assoc this :workers workers))
+        (assoc this
+          :work-ch work-ch
+          :workers workers
+          :listener listener))
       this))
   (stop [this]
     (if workers
       (do (log/info "stopping")
-          (assoc this :workers nil))
+          (async/close! work-ch)
+          (assoc this
+            :work-ch nil
+            :workers nil
+            :listener nil))
       this)))
 
 (defn new-pipeline

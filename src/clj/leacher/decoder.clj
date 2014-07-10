@@ -32,14 +32,14 @@
              (>!! reply
                (try
                  (let [decoded (decode-segment n segment)]
-                   (put! events {:type :segment-decode-complete
-                                 :file file})
+                   (put! events {:type     :segment-decode-complete
+                                 :filename (:filename file)})
                    (assoc work :decoded decoded))
                  (catch Exception e
                    (log/errorf e "worker[%d]: failed decoding" n (:message-id segment))
-                   (put! events {:type    :segment-decode-failed
-                                 :file    file
-                                 :message (.getMessage e)})
+                   (put! events {:type     :segment-decode-failed
+                                 :filename (:filename file)
+                                 :message  (.getMessage e)})
                    (assoc work :error e))))
              (recur)))
 

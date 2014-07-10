@@ -87,14 +87,14 @@
                      (log/debugf "worker[%d]: downloading %s" n (:message-id segment))
                      (let [path (download-to-file conn n work)]
                        (log/debugf "worker[%d]: finished %s" n (:message-id segment))
-                       (put! events {:type :segment-download-complete
-                                     :file file})
+                       (put! events {:type     :segment-download-complete
+                                     :filename (:filename file)})
                        (assoc work :downloaded-path path))
                      (catch Exception e
                        (log/errorf e "worker[%d]: failed downloading %s" n (:message-id segment))
-                       (put! events {:type    :segment-download-failed
-                                     :file    file
-                                     :message (.getMessage e)})
+                       (put! events {:type     :segment-download-failed
+                                     :filename (:filename file)
+                                     :message  (.getMessage e)})
                        (assoc work :error e))))
                  (recur)))
 

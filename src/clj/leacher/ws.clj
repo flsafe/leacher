@@ -18,12 +18,12 @@
                   :settings settings}}))
 
 (defn merge-state
-  [state {:keys [type file] :as data}]
+  [state {:keys [type filename file status] :as data}]
   (condp = type
-    :download-starting
+    :download-pending
     (swap! state assoc (:filename file)
       (-> file
-        (assoc :status :downloading
+        (assoc :status :pending
                :downloaded-segments 0
                :decoded-segments 0
                :download-failed-segments 0
@@ -31,35 +31,23 @@
                :errors [])
         (dissoc :segments)))
 
-    :download-complete
-    (swap! state assoc-in [(:filename file) :status] :download-complete)
-
-    :decode-starting
-    (swap! state assoc-in [(:filename file) :status] :decoding)
-
-    :decode-complete
-    (swap! state assoc-in [(:filename file) :status] :decode-complete)
-
-    :cleanup-starting
-    (swap! state assoc-in [(:filename file) :status] :cleaning)
-
-    :cleanup-complete
-    (swap! state assoc-in [(:filename file) :status] :completed)
+    :file-status
+    (swap! state assoc-in [filename :status] status)
 
     :segment-download-complete
-    (swap! state update-in [(:filename file) :downloaded-segments] inc)
+    (swap! state update-in [filename :downloaded-segments] inc)
 
     :segment-download-failed
-    (swap! state update-in [(:filename file)]
+    (swap! state update-in [filename]
       (fn [m] (-> m
                (update-in [:download-failed-segments] inc)
                (update-in [:errors] conj (:message data)))))
 
     :segment-decode-complete
-    (swap! state update-in [(:filename file) :decoded-segments] inc)
+    (swap! state update-in [filename :decoded-segments] inc)
 
     :segment-decode-failed
-    (swap! state update-in [(:filename file)]
+    (swap! state update-in [filename]
       (fn [m] (-> m
                (update-in [:decode-failed-segments] inc)
                (update-in [:errors] conj (:message data)))))))
