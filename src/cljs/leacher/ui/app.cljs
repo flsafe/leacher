@@ -54,7 +54,7 @@
   [state {:keys [type file filename status] :as data}]
   (condp = type
     :download-pending
-    (swap! state assoc (:filename file)
+    (swap! state assoc-in [:files (:filename file)]
       (-> file
         (assoc :status :pending
                :downloaded-segments 0
