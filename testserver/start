@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+source ~/leacher-env/bin/activate
+python main.py

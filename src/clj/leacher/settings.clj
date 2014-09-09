@@ -18,6 +18,7 @@
    :ssl?            #(= "true" %)
    :max-connections #(Long. ^String %)})
 
+;; TODO not threadsafe
 (defn write-settings
   [m]
   (let [f (fs/file config/settings-file)]
@@ -29,6 +30,8 @@
 (defn ensure-settings
   []
   (when-not (fs/exists? config/settings-file)
+    (fs/mkdir (fs/parent config/settings-file))
+    (fs/create (fs/file config/settings-file))
     (write-settings template)))
 
 (defn read-settings
@@ -74,3 +77,11 @@
 (defn all
   [settings]
   @(:state settings))
+
+(comment
+  
+  (let [s (component/start (new-settings))]
+    (println s)
+    (component/stop s))
+
+  )

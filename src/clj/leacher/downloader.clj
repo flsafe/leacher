@@ -54,8 +54,10 @@
         (let [nntp-settings (settings/all settings)
               conn          (nntp/connect nntp-settings)]
           (with-open [sock ^Socket (:socket conn)]
-            (nntp/authenticate conn nntp-settings)
-            (log/infof "worker[%d]: authenticated" n)
+            (when (and (:user nntp-settings)
+                    (:password nntp-settings))
+              (nntp/authenticate conn nntp-settings)
+              (log/infof "worker[%d]: authenticated" n))
             (try (body-fn conn)
                  (catch Exception e
                    (log/errorf e "worker[%d]: unexpected error, worker dead!" n)))

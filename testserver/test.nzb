@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="iso-8859-1" ?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+  <file poster="Test User &amp;lt;bloggs@nowhere.example&amp;gt;" date="1071674882" subject="pic.jpg (1/2)">
+    <groups>
+      <group>alt.binaries.test</group>
+    </groups>
+    <segments>
+      <segment bytes="12863" number="1">1</segment>
+      <segment bytes="793797" number="2">2</segment>
+      <segment bytes="793140" number="3">3</segment>
+    </segments>
+  </file>
+</nzb>
