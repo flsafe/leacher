@@ -5,7 +5,7 @@
             [leacher.config :as config]
             [me.raynes.fs :as fs]
             [com.stuartsierra.component :as component]
-            [clojure.core.async :as async :refer [go go-loop >! <! onto-chan chan <!! >!! alt! put!]]
+            [clojure.core.async :as async :refer [go go-loop >! <! onto-chan chan <!! >!! alt! put! close!]]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log])
   (:import [java.io RandomAccessFile]))
@@ -56,16 +56,16 @@
         (>! decodes {:reply   reply
                      :events  events
                      :file    file
-                     :segment segment})))
+                     :segment segment}))
+      (close! reply))
     (log/infof "waiting for decoding of %d segments for %s"
       (:total-segments file) filename)
-    (let [replies (async/take (:total-segments file) reply)]
-      (loop []
-        (when-let [{:keys [file segment decoded]} (<!! replies)]
-          (if decoded
-            (write-to-file file decoded)
-            (log/warn "no decoded section to write for" (:message-id segment)))
-          (recur)))))
+    (loop []
+      (when-let [{:keys [file segment decoded]} (<!! reply)]
+        (if decoded
+          (write-to-file file decoded)
+          (log/warn "no decoded section to write for" (:message-id segment)))
+        (recur))))
   (put! events {:type     :file-status
                 :status   :decode-complete
                 :filename filename}))
@@ -82,21 +82,22 @@
         (>! downloads {:reply   reply
                        :events  events
                        :file    file
-                       :segment segment})))
+                       :segment segment}))
+      (close! reply))
     (log/infof "waiting for downloads of %d segments for %s"
       (:total-segments file) filename)
-    (let [replies (async/take (:total-segments file) reply)
-          result  (loop [result file]
-                    (if-let [{:keys [error downloaded-path segment]} (<!! replies)]
-                      (recur (cond-> result
-                               error
-                               (assoc-in [:segments (:message-id segment)
-                                          :error] error)
-                               downloaded-path
-                               (assoc-in [:segments (:message-id segment)
-                                          :downloaded-path]
-                                 downloaded-path)))
-                      result))]
+    (let [result (loop [result file]
+                   (if-let [{:keys [error downloaded-path segment]} (<!! reply)]
+                     (recur (cond-> result
+                              error
+                              (assoc-in [:segments (:message-id segment)
+                                         :error] error)
+
+                              downloaded-path
+                              (assoc-in [:segments (:message-id segment)
+                                         :downloaded-path]
+                                downloaded-path)))
+                     result))]
       (put! events {:type     :file-status
                     :status   :download-complete
                     :filename filename})
@@ -127,6 +128,8 @@
       :priority true)))
 
 (defn start-listener
+  "Listens for messages from the watcher, which are new nzb files in
+  the queue directory."
   [{:keys [watcher shutdown events] :as channels} work-ch]
   (go-loop []
     (alt!
@@ -147,8 +150,8 @@
                                :file file}))
                (doseq [file files]
                  (>! work-ch file)))
-                (catch Exception e
-                  (log/error e "failed processing" (str f))))
+             (catch Exception e
+               (log/error e "failed processing" (str f))))
            (recur)))
 
       :priority true)))
@@ -181,3 +184,4 @@
 (defn new-pipeline
   []
   (map->Pipeline {}))
+

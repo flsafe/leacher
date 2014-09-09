@@ -26,6 +26,11 @@
     (response conn)
     conn))
 
+(defn closed?
+  [conn]
+  (let [socket ^Socket (:socket conn)]
+    (.isClosed socket)))
+
 (defn write
   [conn ^String msg]
   (doto ^Writer (:out conn)

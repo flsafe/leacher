@@ -2,7 +2,7 @@
   :description "download from usenet"
   :dependencies [
                  ;; clojure core
-                 [org.clojure/clojure "1.5.1"]
+                 [org.clojure/clojure "1.6.0"]
                  [org.clojure/tools.cli "0.3.1"]
                  [org.clojure/data.zip "0.1.1"]
                  [org.clojure/tools.namespace "0.2.4"]

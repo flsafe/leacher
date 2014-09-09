@@ -22,7 +22,7 @@
 (defn try-groups
   [conn n result-file file segment]
   (loop [groups (:groups file)]
-    (when groups
+    (if groups
       (let [group      (first groups)
             message-id (:message-id segment)]
         (nntp/group conn (-> file :groups first))
@@ -31,7 +31,8 @@
             (do (log/infof "worker[%d]: failed to dl %s from %s, trying next group"
                   n message-id group)
                 (recur (next groups)))
-            (io/copy (:bytes resp) result-file)))))))
+            (io/copy (:bytes resp) result-file))))
+      (throw (ex-info "failed to download segment" segment)))))
 
 (defn download-to-file
   [conn n {:keys [file segment] :as work}]
@@ -42,71 +43,72 @@
       (log/infof "worker[%d]: %s already exists" n (str result-file)))
     (fs/absolute-path result-file)))
 
-;; TODO: write a reconnecting connection thing that auto-retries when
-;; encountering connection errors
+(def MAX-WAIT-SECONDS 60)
 
-(defn with-reconnecting
-  [n settings body-fn]
-  (let [retry (atom true)
-        wait  (atom 1)]
-    (while @retry
-      (try
-        (let [nntp-settings (settings/all settings)
-              conn          (nntp/connect nntp-settings)]
-          (with-open [sock ^Socket (:socket conn)]
-            (when (and (:user nntp-settings)
-                    (:password nntp-settings))
-              (nntp/authenticate conn nntp-settings)
-              (log/infof "worker[%d]: authenticated" n))
-            (try (body-fn conn)
-                 (catch Exception e
-                   (log/errorf e "worker[%d]: unexpected error, worker dead!" n)))
-            (reset! retry false)))
-        (catch java.net.SocketException e
-          (log/errorf e "worker[%d]: connection error, retrying in %ds" n @wait)
-          (Thread/sleep (* 1000 @wait))
-          (swap! wait #(min (* % 2) 30)))))))
+;; connect with back off
+(defn connect-to-nntp
+  [settings n]
+  (loop [wait-s 1]
+    (let [result (try
+                   (log/infof "worker[%d]: connecting to nntp server" n)
+                   (let [nntp-settings (settings/all settings)
+                         conn          (nntp/connect nntp-settings)]
+                     (when (and (:user nntp-settings)
+                             (:password nntp-settings))
+                       (nntp/authenticate conn nntp-settings)
+                       (log/infof "worker[%d]: authenticated" n))
+                     (log/infof "worker[%d]: connected successfully" n)
+                     conn)
+                   (catch Exception e
+                     (log/errorf e "worker[%d]: failed to connect, retrying in %d seconds" n wait-s)
+                     (<!! (async/timeout (* wait-s 1000)))
+                     :error))]
+      (if (= :error result)
+        (recur (min (* wait-s 2) MAX-WAIT-SECONDS))
+        result))))
 
 (defn start-worker
   [settings {:keys [downloads shutdown]} n]
   (thread
     (log/infof "worker[%d]: starting" n)
-    (with-reconnecting n settings
-      (fn [conn]
-        (loop []
-          (log/debugf "worker[%d] waiting" n)
-          (alt!!
-            shutdown
-            ([_]
-               (log/info "shutting down worker" n))
+    (loop [conn (connect-to-nntp settings n)]
+      (log/debugf "worker[%d] waiting" n)
+      (alt!!
+        shutdown
+        ([_]
+           (log/info "shutting down worker" n))
 
-            downloads
-            ([{:keys [file segment reply events] :as work}]
-               (when work
-                 (log/debugf "worker[%d]: got segment %s" n (:message-id segment))
-                 (>!! reply
-                   (try
-                     (log/debugf "worker[%d]: downloading %s" n (:message-id segment))
-                     (let [path (download-to-file conn n work)]
-                       (log/debugf "worker[%d]: finished %s" n (:message-id segment))
-                       (put! events {:type     :segment-download-complete
-                                     :filename (:filename file)})
-                       (assoc work :downloaded-path path))
-                     (catch Exception e
-                       (log/errorf e "worker[%d]: failed downloading %s" n (:message-id segment))
-                       (put! events {:type     :segment-download-failed
-                                     :filename (:filename file)
-                                     :message  (.getMessage e)})
-                       (assoc work :error e))))
-                 (recur)))
+        downloads
+        ([{:keys [file segment reply events] :as work}]
+           (when work
+             (log/debugf "worker[%d]: got segment %s" n (:message-id segment))
+             (>!! reply
+               (try
+                 (log/debugf "worker[%d]: downloading %s" n (:message-id segment))
+                 (let [path (download-to-file conn n work)]
+                   (log/debugf "worker[%d]: finished %s" n (:message-id segment))
+                   (put! events {:type     :segment-download-complete
+                                 :filename (:filename file)})
+                   (assoc work :downloaded-path path))
+                 (catch Exception e
+                   (log/errorf e "worker[%d]: failed downloading %s" n (:message-id segment))
+                   (put! events {:type     :segment-download-failed
+                                 :filename (:filename file)
+                                 :message  (.getMessage e)})
+                   (assoc work :error e))))
+             (recur (if (nntp/closed? conn)
+                      (connect-to-nntp settings n)
+                      conn))))
 
-            :priority true))))))
+        :priority true))))
 
 (defn start-workers
   [settings channels]
   (doall
     (map (partial start-worker settings channels)
       (range (settings/get-setting settings :max-connections)))))
+
+;;
 
 (defrecord Downloader [channels settings workers]
   component/Lifecycle
