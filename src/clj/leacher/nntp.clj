@@ -14,23 +14,6 @@
 
 (declare response)
 
-(defn connect
-  [{:keys [host port ssl?]}]
-  (let [socket (if ssl?
-                 (.createSocket (SSLSocketFactory/getDefault)
-                   ^String host ^int port)
-                 (Socket. ^String host ^Long port))
-        conn   {:socket socket
-                :in     (io/reader socket :encoding ENCODING)
-                :out    (io/writer socket :encoding ENCODING)}]
-    (response conn)
-    conn))
-
-(defn closed?
-  [conn]
-  (let [socket ^Socket (:socket conn)]
-    (.isClosed socket)))
-
 (defn write
   [conn ^String msg]
   (doto ^Writer (:out conn)
@@ -90,32 +73,84 @@
             (.write b c)
             (recur c)))))))
 
-(defn authenticate
-  [conn {:keys [user password]}]
-  (write conn (str "AUTHINFO USER " user))
-  (let [resp (response conn)]
-    (when (<= 300 (:code resp) 399)
-      (write conn (str "AUTHINFO PASS " password))
-      (response conn))))
+(defprotocol NntpConnection
+  (connect [this])
+  (re-connect [this])
+  (with-reconnect-if-timeout [this body-fn])
+  (close [this])
+  (authenticate [this])
+  (group [this name-of])
+  (article [this message-id]))
 
-(defn group
-  [conn name-of]
-  (write conn (str "GROUP " name-of))
-  (let [resp              (response conn)
-        [number low high] (string/split (:body resp) #" ")]
-    (assoc resp
-      :number (parse-long number)
-      :low    (parse-long low)
-      :high   (parse-long high)
-      :group  name-of)))
+(defn new-connection
+  [opts]
+  (let [conn          (atom nil)
+        current-group (atom nil)]
+    (reify NntpConnection
+      
+      (connect [this]
+        (let [{:keys [host port ssl?]} opts
+              socket (if ssl?
+                       (.createSocket (SSLSocketFactory/getDefault)
+                         ^String host ^int port)
+                       (Socket. ^String host ^Long port))]
+          (reset! conn {:socket socket
+                        :in     (io/reader socket :encoding ENCODING)
+                        :out    (io/writer socket :encoding ENCODING)})
+          (response @conn)))
 
-(defn article
-  [conn message-id]
-  (write conn (str "ARTICLE " message-id))
-  (let [resp    (response conn)
-        headers (header-response conn)
-        bytes   (byte-body-response conn)]
-    (assoc resp
-      :headers headers
-      :bytes   bytes
-      :size    (count bytes))))
+      (re-connect [this]
+        (connect this)
+        (when @current-group
+          (group this @current-group)))
+
+      (with-reconnect-if-timeout [this body-fn]
+        (try
+          (body-fn)
+          (catch clojure.lang.ExceptionInfo e
+            (if (= 400 (-> e ex-data :code))
+              (do (println "idle timeout, reconnecting")
+                  (re-connect this)
+                  (body-fn))
+              (throw e)))))
+
+      (authenticate [this]
+        (with-reconnect-if-timeout this
+          (fn []
+            (let [{:keys [user password]} opts]
+              (when (and user password)
+                (write @conn (str "AUTHINFO USER " user))
+                (let [resp (response @conn)]
+                  (when (<= 300 (:code resp) 399)
+                    (write @conn (str "AUTHINFO PASS " password))
+                    (response @conn))))))))
+
+      (group [this group-name]
+        (reset! current-group group-name)
+        (with-reconnect-if-timeout this
+          (fn []
+            (write @conn (str "GROUP " group-name))
+            (let [resp              (response @conn)
+                  [number low high] (string/split (:body resp) #" ")]
+              (assoc resp
+                :number (parse-long number)
+                :low    (parse-long low)
+                :high   (parse-long high)
+                :group  group-name)))))
+
+      (article [this message-id]
+        (with-reconnect-if-timeout this
+          (fn []
+            (write @conn (str "ARTICLE " message-id))
+            (let [resp    (response @conn)
+                  headers (header-response @conn)
+                  bytes   (byte-body-response conn)]
+              (assoc resp
+                :headers headers
+                :bytes   bytes
+                :size    (count bytes))))))
+
+      (close [this]
+        (.close ^Socket (:socket @conn))))))
+
+

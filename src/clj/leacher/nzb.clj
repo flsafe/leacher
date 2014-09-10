@@ -2,9 +2,7 @@
   (:require [clojure.data.zip.xml :as zip-xml]
             [clojure.java.io :as io]
             [clojure.xml :as xml]
-            [clojure.zip :as zip]
-
-            )
+            [clojure.zip :as zip])
   (:import (clojure.lang XMLHandler)
            (java.io BufferedInputStream)
            (javax.xml.parsers SAXParser SAXParserFactory)))
@@ -50,9 +48,9 @@
         encoding    (encoding-from subject)
         groups      (vec (zip-xml/xml-> file :groups :group zip-xml/text))
         segments    (->> (zip-xml/xml-> file :segments :segment)
-                         (map segment->map)
-                         (map (juxt :message-id identity))
-                         (into {}))
+                      (map segment->map)
+                      (map (juxt :message-id identity))
+                      (into {}))
         total-bytes (reduce + (map :bytes (vals segments)))]
     {:poster         poster
      :date           date
@@ -78,6 +76,6 @@
      :total-segments total-segments}))
 
 (comment
-  (keys (parse "/home/gareth/.leacher/slayer.nzb"))
+  (parse "testserver/test.nzb")
 
   )

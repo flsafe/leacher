@@ -43,29 +43,15 @@
       (log/infof "worker[%d]: %s already exists" n (str result-file)))
     (fs/absolute-path result-file)))
 
-(def MAX-WAIT-SECONDS 60)
-
-;; connect with back off
 (defn connect-to-nntp
   [settings n]
-  (loop [wait-s 1]
-    (let [result (try
-                   (log/infof "worker[%d]: connecting to nntp server" n)
-                   (let [nntp-settings (settings/all settings)
-                         conn          (nntp/connect nntp-settings)]
-                     (when (and (:user nntp-settings)
-                             (:password nntp-settings))
-                       (nntp/authenticate conn nntp-settings)
-                       (log/infof "worker[%d]: authenticated" n))
-                     (log/infof "worker[%d]: connected successfully" n)
-                     conn)
-                   (catch Exception e
-                     (log/errorf e "worker[%d]: failed to connect, retrying in %d seconds" n wait-s)
-                     (<!! (async/timeout (* wait-s 1000)))
-                     :error))]
-      (if (= :error result)
-        (recur (min (* wait-s 2) MAX-WAIT-SECONDS))
-        result))))
+  (log/infof "worker[%d]: connecting to nntp server" n)
+  (let [nntp-settings (settings/all settings)
+        conn          (nntp/new-connection nntp-settings)]
+    (nntp/connect conn)
+    (nntp/authenticate conn)
+    (log/infof "worker[%d]: connected successfully" n)
+    conn))
 
 (defn start-worker
   [settings {:keys [downloads shutdown]} n]
@@ -96,9 +82,7 @@
                                  :filename (:filename file)
                                  :message  (.getMessage e)})
                    (assoc work :error e))))
-             (recur (if (nntp/closed? conn)
-                      (connect-to-nntp settings n)
-                      conn))))
+             (recur conn)))
 
         :priority true))))
 
