@@ -13,3 +13,4 @@ resources/public/out-dev/
 resources/public/js/app.js
 leacher.log*
 testdata
+testserver/storage/

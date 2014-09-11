@@ -19,7 +19,7 @@
 
 (defn merge-state
   [state {:keys [type filename file status] :as data}]
-  (condp = type
+  (case type
     :download-pending
     (swap! state assoc (:filename file)
       (-> file
@@ -40,8 +40,8 @@
     :segment-download-failed
     (swap! state update-in [filename]
       (fn [m] (-> m
-               (update-in [:download-failed-segments] inc)
-               (update-in [:errors] conj (:message data)))))
+                (update-in [:download-failed-segments] inc)
+                (update-in [:errors] conj (:message data)))))
 
     :segment-decode-complete
     (swap! state update-in [filename :decoded-segments] inc)
@@ -49,8 +49,8 @@
     :segment-decode-failed
     (swap! state update-in [filename]
       (fn [m] (-> m
-               (update-in [:decode-failed-segments] inc)
-               (update-in [:errors] conj (:message data)))))))
+                (update-in [:decode-failed-segments] inc)
+                (update-in [:errors] conj (:message data)))))))
 
 (defn start-publisher
   [clients state {:keys [events shutdown]}]
@@ -68,8 +68,8 @@
                (merge-state state event)
                (let [ws-event (pr-str {:type :update
                                        :data event})]
-                (doseq [ch @clients]
-                  (send! ch ws-event)))
+                 (doseq [ch @clients]
+                   (send! ch ws-event)))
                (catch Exception e
                  (log/error e "failed sending to client")))
              (recur)))
@@ -112,11 +112,10 @@
         (doseq [c @clients]
           (close c))
         (stop-server-fn)
-        (reset! clients (atom #{}))
         (assoc this
           :stop-server-fn nil
           :clients nil
-          :state state))
+          :state nil))
       this)))
 
 (defn new-ws-api

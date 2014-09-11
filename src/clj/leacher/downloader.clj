@@ -28,10 +28,12 @@
         (nntp/group conn (-> file :groups first))
         (let [resp (article-or-missing conn message-id)]
           (if (= :missing resp)
-            (do (log/infof "worker[%d]: failed to dl %s from %s, trying next group"
+            (do (log/infof "worker[%d]: %s not available in group %s, trying next group"
                   n message-id group)
                 (recur (next groups)))
-            (io/copy (:bytes resp) result-file))))
+            (do (log/infof "worker[%d]: saving %s (%d bytes) to %s"
+                  n message-id (count (:bytes resp)) result-file)
+                (io/copy (:bytes resp) result-file)))))
       (throw (ex-info "failed to download segment" segment)))))
 
 (defn download-to-file

@@ -56,16 +56,16 @@
         (>! decodes {:reply   reply
                      :events  events
                      :file    file
-                     :segment segment}))
-      (close! reply))
+                     :segment segment})))
     (log/infof "waiting for decoding of %d segments for %s"
       (:total-segments file) filename)
-    (loop []
-      (when-let [{:keys [file segment decoded]} (<!! reply)]
-        (if decoded
-          (write-to-file file decoded)
-          (log/warn "no decoded section to write for" (:message-id segment)))
-        (recur))))
+    (let [replies (async/take (:total-segments file) reply)]
+      (loop []
+        (when-let [{:keys [file segment decoded]} (<!! replies)]
+          (if decoded
+            (write-to-file file decoded)
+            (log/warn "no decoded section to write for" (:message-id segment)))
+          (recur)))))
   (put! events {:type     :file-status
                 :status   :decode-complete
                 :filename filename}))
@@ -82,12 +82,12 @@
         (>! downloads {:reply   reply
                        :events  events
                        :file    file
-                       :segment segment}))
-      (close! reply))
+                       :segment segment})))
     (log/infof "waiting for downloads of %d segments for %s"
       (:total-segments file) filename)
-    (let [result (loop [result file]
-                   (if-let [{:keys [error downloaded-path segment]} (<!! reply)]
+    (let [replies (async/take (:total-segments file) reply)
+          result (loop [result file]
+                   (if-let [{:keys [error downloaded-path segment]} (<!! replies)]
                      (recur (cond-> result
                               error
                               (assoc-in [:segments (:message-id segment)

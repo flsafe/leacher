@@ -1,6 +1,7 @@
 (ns leacher.nntp
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
+            [clojure.tools.logging :as log]
             [leacher.utils :refer [parse-long]])
   (:import (java.io BufferedReader ByteArrayOutputStream Writer)
            (java.net Socket)
@@ -13,18 +14,7 @@
 (def NEW_LINE (int \newline))
 
 (declare response)
-
-(defn connect
-  [conn]
-  (let [{:keys [host port ssl?]} (:opts conn)
-        socket (if ssl?
-                 (.createSocket (SSLSocketFactory/getDefault)
-                   ^String host ^int port)
-                 (Socket. ^String host ^Long port))]
-    (reset! conn {:socket socket
-                  :in     (io/reader socket :encoding ENCODING)
-                  :out    (io/writer socket :encoding ENCODING)})
-    (response @(:conn conn))))
+(declare group)
 
 (defn write
   [conn ^String msg]
@@ -33,6 +23,46 @@
         (.write ^int RETURN)
         (.write ^int NEW_LINE)
         (.flush)))
+
+(defn connect
+  [conn]
+  (let [{:keys [host port ssl?]} (:opts conn)
+        socket                   (if ssl?
+                                   (.createSocket (SSLSocketFactory/getDefault)
+                                     ^String host ^int port)
+                                   (Socket. ^String host ^Long port))]
+    (reset! (:conn conn) {:socket socket
+                          :in     (io/reader socket :encoding ENCODING)
+                          :out    (io/writer socket :encoding ENCODING)})
+    (response @(:conn conn))))
+
+(defn authenticate
+  [conn]
+  (let [{:keys [user password]} (:opts conn)]
+    (when (and user password)
+      (write @(:conn conn) (str "AUTHINFO USER " user))
+      (let [resp (response @(:conn conn))]
+        (when (<= 300 (:code resp) 399)
+          (write @(:conn conn) (str "AUTHINFO PASS " password))
+          (response @(:conn conn)))))))
+
+(defn re-connect
+  [conn]
+  (connect conn)
+  (authenticate conn)
+  (when @(:current-group conn)
+    (group conn @(:current-group conn))))
+
+(defn with-reconnect-if-timeout
+  [conn body-fn]
+  (try
+    (body-fn)
+    (catch clojure.lang.ExceptionInfo e
+      (if (= 400 (-> e ex-data :code))
+        (do (log/info "idle timeout, reconnecting")
+            (re-connect conn)
+            (body-fn))
+        (throw e)))))
 
 (def response-re #"(\d{3}) (.*)")
 
@@ -43,6 +73,7 @@
         code          (parse-long code)
         resp          {:code code
                        :body body}]
+    (log/debug "nntp: response" resp)
     (if (>= code 400)
       (throw (ex-info "error response" resp))
       resp)))
@@ -85,37 +116,9 @@
             (.write b c)
             (recur c)))))))
 
-(defn re-connect
-  [conn]
-  (connect conn)
-  (when @(:current-group conn)
-    (group @(:conn conn) @(:current-group conn))))
-
-(defn with-reconnect-if-timeout
-  [conn body-fn]
-  (try
-    (body-fn)
-    (catch clojure.lang.ExceptionInfo e
-      (if (= 400 (-> e ex-data :code))
-        (do (println "idle timeout, reconnecting")
-            (re-connect conn)
-            (body-fn))
-        (throw e)))))
-
-(defn authenticate
-  [conn]
-  (with-reconnect-if-timeout conn
-    (fn []
-      (let [{:keys [user password]} (:opts conn)]
-        (when (and user password)
-          (write @(:conn conn) (str "AUTHINFO USER " user))
-          (let [resp (response @(:conn conn))]
-            (when (<= 300 (:code resp) 399)
-              (write @(:conn conn) (str "AUTHINFO PASS " password))
-              (response @(:conn conn)))))))))
-
 (defn group
   [conn group-name]
+  (log/debug "nntp: group" group-name)
   (reset! (:current-group conn) group-name)
   (with-reconnect-if-timeout conn
     (fn []
@@ -135,13 +138,15 @@
       (write @(:conn conn) (str "ARTICLE " message-id))
       (let [resp    (response @(:conn conn))
             headers (header-response @(:conn conn))
-            bytes   (byte-body-response @(:conn conn))]
-        (assoc resp
-          :headers headers
-          :bytes   bytes
-          :size    (count bytes))))))
+            bytes   (byte-body-response @(:conn conn))
+            result  (assoc resp
+                      :headers headers
+                      :bytes   bytes
+                      :size    (count bytes))]
+        (log/debug "nntp: article" result)
+        result))))
 
-
+;;
 
 (defrecord NntpConnection [conn current-group opts])
 
@@ -152,3 +157,16 @@
     (map->NntpConnection {:conn conn
                           :current-group current-group
                           :opts opts})))
+
+(comment
+
+  (def c (new-connection {:host     "localhost"
+                          :port     5000
+                          :ssl?     false}))
+
+  (connect c)
+  (authenticate c)
+  (group c "alt.binaries.test")
+
+
+  )
