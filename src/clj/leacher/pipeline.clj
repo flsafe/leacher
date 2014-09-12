@@ -38,10 +38,9 @@
 (defn write-to-file
   [file decoded]
   (let [to-file (file->temp-file file)
-        begin   (-> decoded :keywords :part :begin dec)
-        end     (-> decoded :keywords :part :end dec)]
+        begin   (-> decoded :keywords :part :begin)]
     (with-open [output (RandomAccessFile. to-file "rw")]
-      (.seek output begin)
+      (.seek output (or begin 0))
       (.write output ^bytes (:bytes decoded)))))
 
 (defn decode

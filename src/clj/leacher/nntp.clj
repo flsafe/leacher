@@ -1,172 +1,67 @@
 (ns leacher.nntp
-  (:require [clojure.java.io :as io]
-            [clojure.string :as string]
-            [clojure.tools.logging :as log]
-            [leacher.utils :refer [parse-long]])
-  (:import (java.io BufferedReader ByteArrayOutputStream Writer)
-           (java.net Socket)
-           (javax.net.ssl SSLSocketFactory)))
+  (:require [leacher.nntp.impl :as impl]
+            [leacher.nntp.stub :as stub]))
 
-(def ENCODING "ISO-8859-1")
-
-(def DOT      (int \.))
-(def RETURN   (int \return))
-(def NEW_LINE (int \newline))
-
-(declare response)
-(declare group)
-
-(defn write
-  [conn ^String msg]
-  (doto ^Writer (:out conn)
-        (.write msg)
-        (.write ^int RETURN)
-        (.write ^int NEW_LINE)
-        (.flush)))
-
-(defn connect
-  [conn]
-  (let [{:keys [host port ssl?]} (:opts conn)
-        socket                   (if ssl?
-                                   (.createSocket (SSLSocketFactory/getDefault)
-                                     ^String host ^int port)
-                                   (Socket. ^String host ^Long port))]
-    (reset! (:conn conn) {:socket socket
-                          :in     (io/reader socket :encoding ENCODING)
-                          :out    (io/writer socket :encoding ENCODING)})
-    (response @(:conn conn))))
-
-(defn authenticate
-  [conn]
-  (let [{:keys [user password]} (:opts conn)]
-    (when (and user password)
-      (write @(:conn conn) (str "AUTHINFO USER " user))
-      (let [resp (response @(:conn conn))]
-        (when (<= 300 (:code resp) 399)
-          (write @(:conn conn) (str "AUTHINFO PASS " password))
-          (response @(:conn conn)))))))
-
-(defn re-connect
-  [conn]
-  (connect conn)
-  (authenticate conn)
-  (when @(:current-group conn)
-    (group conn @(:current-group conn))))
-
-(defn with-reconnect-if-timeout
-  [conn body-fn]
-  (try
-    (body-fn)
-    (catch clojure.lang.ExceptionInfo e
-      (if (= 400 (-> e ex-data :code))
-        (do (log/info "idle timeout, reconnecting")
-            (re-connect conn)
-            (body-fn))
-        (throw e)))))
-
-(def response-re #"(\d{3}) (.*)")
-
-(defn response
-  [{^BufferedReader in :in}]
-  (let [resp          (.readLine in)
-        [_ code body] (re-find response-re resp)
-        code          (parse-long code)
-        resp          {:code code
-                       :body body}]
-    (log/debug "nntp: response" resp)
-    (if (>= code 400)
-      (throw (ex-info "error response" resp))
-      resp)))
-
-(defn header-response
-  [{^BufferedReader in :in}]
-  (loop [res {}]
-    (let [line (.readLine in)]
-      ;; headers are terminated by a blank line
-      (if (string/blank? line)
-        res
-        (let [[k v] (string/split line #":" 2)
-              k     (keyword (string/lower-case k))
-              v     (string/trim v)]
-          (recur (assoc res k v)))))))
-
-(defn byte-body-response
-  [{^BufferedReader in :in}]
-  (let [b   (ByteArrayOutputStream.)]
-    (loop [previous nil]
-      (let [c (.read in)]
-        ;; if first char after newline is dot, check for dot-stuffing
-        (if (and (= NEW_LINE previous) (= DOT c))
-          (let [c2 (.read in)]
-            (condp = c2
-              ;; undo dot-stuffing, throw away one dot
-              DOT
-              (do
-                (.write b c2)
-                (recur c2))
-
-              ;; end of message indicator, read and throw away crlf and return
-              RETURN
-              (do
-                (.read in)
-                (.toByteArray b))
-
-              (throw (Exception. (str "unexpected character after '.':" c2)))))
-          (do
-            (.write b c)
-            (recur c)))))))
-
-(defn group
-  [conn group-name]
-  (log/debug "nntp: group" group-name)
-  (reset! (:current-group conn) group-name)
-  (with-reconnect-if-timeout conn
-    (fn []
-      (write @(:conn conn) (str "GROUP " group-name))
-      (let [resp              (response @(:conn conn))
-            [number low high] (string/split (:body resp) #" ")]
-        (assoc resp
-          :number (parse-long number)
-          :low    (parse-long low)
-          :high   (parse-long high)
-          :group  group-name)))))
-
-(defn article
-  [conn message-id]
-  (with-reconnect-if-timeout conn
-    (fn []
-      (write @(:conn conn) (str "ARTICLE " message-id))
-      (let [resp    (response @(:conn conn))
-            headers (header-response @(:conn conn))
-            bytes   (byte-body-response @(:conn conn))
-            result  (assoc resp
-                      :headers headers
-                      :bytes   bytes
-                      :size    (count bytes))]
-        (log/debug "nntp: article" result)
-        result))))
+(defprotocol INntpConnection
+  (connect [this])
+  (authenticate [this])
+  (group [this group-name])
+  (article [this message-id]))
 
 ;;
 
-(defrecord NntpConnection [conn current-group opts])
+(defrecord NntpConnection [conn current-group opts]
+  INntpConnection
+  (connect [this]
+    (impl/connect this))
+  (authenticate [this]
+    (impl/authenticate this))
+  (group [this group-name]
+    (impl/group this group-name))
+  (article [this message-id]
+    (impl/article this message-id)))
+
+(defn new-nntp-connection
+  [opts]
+  (map->NntpConnection {:conn          (atom nil)
+                        :current-group (atom nil)
+                        :opts          opts}))
+
+;;
+
+(defrecord StubNntpConnection [opts current-group]
+  INntpConnection
+  (connect [this]
+    (stub/connect this))
+  (authenticate [this]
+    (stub/authenticate this))
+  (group [this group-name]
+    (stub/group this group-name))
+  (article [this message-id]
+    (stub/article this message-id)))
+
+(defn new-stub-connection
+  [{:keys [root-dir] :as opts}]
+  (map->StubNntpConnection {:opts          opts
+                            :current-group (atom nil)}))
+
+;;
 
 (defn new-connection
   [opts]
-  (let [conn          (atom nil)
-        current-group (atom nil)]
-    (map->NntpConnection {:conn conn
-                          :current-group current-group
-                          :opts opts})))
+  (case (:type opts)
+    :real (new-nntp-connection opts)
+    :stub (new-stub-connection opts)))
 
 (comment
 
-  (def c (new-connection {:host     "localhost"
-                          :port     5000
-                          :ssl?     false}))
+  (def c (new-connection {:type     :stub
+                          :root-dir "test-resources/stub-data"}))
 
   (connect c)
   (authenticate c)
   (group c "alt.binaries.test")
+  (article c "<cats.yenc>")
 
 
   )

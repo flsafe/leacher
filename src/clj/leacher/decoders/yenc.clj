@@ -94,3 +94,21 @@
   (let [begin (:begin keywords)
         end   (:end keywords)]
     (= (:size begin) (:size end) (count bytes))))
+
+(comment
+  (def f (io/file "test-resources/stub-data/alt.binaries.test/<cats.yenc>"))
+  (def d (decode f))
+ 
+  (require '[clojure.java.io :as io])
+
+  (count (:bytes d))
+
+  (let [out (java.io.ByteArrayOutputStream.)]
+    (io/copy f out)
+    (count (.toByteArray out)))
+  
+  (count (.getBytes (slurp f :encoding "ISO-8859-1") "ISO-8859-1"))
+  
+  (io/copy (:bytes d) (io/file "/tmp/wtf.jpg"))
+
+  )

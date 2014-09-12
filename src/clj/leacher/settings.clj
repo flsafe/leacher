@@ -6,7 +6,8 @@
             [clojure.java.io :as io]))
 
 (def template
-  {:host            ""
+  {:type            :real
+   :host            ""
    :port            119
    :ssl?            false
    :user            ""
@@ -14,7 +15,8 @@
    :max-connections 10})
 
 (def parsers
-  {:port            #(Long. ^String %)
+  {:type            keyword
+   :port            #(Long. ^String %)
    :ssl?            #(= "true" %)
    :max-connections #(Long. ^String %)})
 

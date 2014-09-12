@@ -76,6 +76,6 @@
      :total-segments total-segments}))
 
 (comment
-  (parse "testserver/test.nzb")
+  (parse "test-resources/cats.nzb")
 
   )
