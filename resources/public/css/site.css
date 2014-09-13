@@ -3,19 +3,17 @@ body {
 }
 
 #connection-status {
-    text-transform: uppercase;
-    font-weight: bold;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 15px;
+    height: 15px;
+    -webkit-border-radius: 15px;
 }
 
-#connection-status.connected    { color: #5cb85c; }
-#connection-status.error        { color: #d9534f; }
-#connection-status.disconnected { color: gray; }
-
-.header .btn { margin: 20px 0 0 5px; }
-
-ul#workers {
-
-}
+#connection-status.connected    { background-color: #5cb85c; }
+#connection-status.error        { background-color: #d9534f; }
+#connection-status.disconnected { background-color: gray; }
 
 ul#key li {
     margin-right: 1px;
@@ -34,55 +32,18 @@ ul#workers li {
 .downloading { background: #5cb85c; }
 .error       { background: #d9534f; }
 
-#files li.bg-primary { color: #fff; }
-
-#files {
-    font-size: small;
+ul#files li {
+    border-bottom: 1px solid #ddd;
+    padding: 10px 0;
 }
 
-#files li {
-    width: 75px;
-    height: 75px;
-    line-height: 75px;
-    font-size: 18px;
-    float: left;
-    margin: 0 5px 5px 0;
-    text-align: center;
-    color: #999;
+.icon {
+    font-size: 2.5em;
+    line-height: 1em;
+    margin-right: 10px;
+    color: #9cf;
 }
 
-#files .glyphicon-ok {
-    color: #bfd0b8;
-}
-
-#files .icon {
-    font-size: 2em;
-    margin-right: 5px;
-}
-
-#files .filename {
-    color: #333;
+.filename {
     font-weight: bold;
-}
-
-#files .bytes, #files .rate, #files .timing, #files .segments {
-    color: #666;
-    font-style: italic;
-}
-
-#files .status {
-
-}
-
-#files .progress {
-    width: 200px;
-    position: absolute;
-    margin: 0;
-    right: 0;
-    bottom: 10px;
-    height: 5px;
-}
-
-.settings-editor button {
-    margin-right: 5px;
 }

@@ -40,7 +40,7 @@
   (let [to-file (file->temp-file file)
         begin   (-> decoded :keywords :part :begin)]
     (with-open [output (RandomAccessFile. to-file "rw")]
-      (.seek output (or begin 0))
+      (.seek output (if begin (dec begin) 0))
       (.write output ^bytes (:bytes decoded)))))
 
 (defn decode

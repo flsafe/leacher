@@ -119,10 +119,12 @@
   [filename]
   (let [ext (last (string/split filename #"\."))]
     (condp re-find ext
-      #"\.(mp3|m4p|flac|ogg)"              "headphones"
-      #"\.(avi|mp4|mpg|mkv)"               "film"
-      #"\.(zip|rar|tar|gz|par|par2|r\d\d)" "compressed"
-      :nil)))
+      #"(?i)(mp3|m4p|flac|ogg)"      "headphones"
+      #"(?i)(avi|mp4|mpg|mkv)"       "film"
+      #"(?i)(zip|rar|tar|gz|r\d\d)"  "compressed"
+      #"(?i)(jpg|jpeg|gif|png|tiff)" "camera"
+      #"(?i)(par|par2)"              "wrench"
+      nil)))
 
 (defn ->bytes-display
   [b]
@@ -148,24 +150,8 @@
 
 (defn connection-status
   [status]
-  (dom/div #js {:className "col-md-12"}
-    (dom/div #js {:id        "connection-status"
-                  :className (str "pull-right " (name status))}
-      (name status))))
-
-
-
-;; (dom/div #js {:className "status pull-right"}
-;;   (label (get status->cls (:status file) :default)
-;;     (-> file :status name)
-;;     :title (:error file)))
-
-;; (when (= :downloading (:status file))
-;;   (dom/div #js {:className "progress"}
-;;     (dom/div #js {:className "progress-bar"
-;;                   :style     #js {:width (str percent-complete "%")}})))
-
-;; (dom/div #js {:className "clearfix"})
+  (dom/div #js {:id        "connection-status"
+                :className (name status)}))
 
 (defn file-row
   [[filename file] _]
@@ -173,66 +159,31 @@
     om/IRender
     (render [_]
       (let [success? (and (zero? (:decode-failed-segments file))
-                       (zero? (:download-failed-segments file)))
-            status (cond
-                     (not success?)
-                     "bg-danger"
+                       (zero? (:download-failed-segments file)))]
+        (dom/li nil
 
-                     (= :pending (:status file))
-                     "bg-info"
+          (dom/div #js {:className "icon pull-left"}
+            (when-let [s (file->glyphicon filename)]
+              (dom/span #js {:className (str "glyphicon glyphicon-" s)})))
 
-                     (= :downloading (:status file))
-                     "bg-warning"
+          (dom/div #js {:className "pull-left"}
+            (dom/span #js {:className "filename"}
+              filename)
 
-                     (= :decoding (:status file))
-                     "bg-primary"
+            (dom/div nil
+              (dom/span #js {:className "segments"}
+                (get file :downloaded-segments) "/"
+                (:total-segments file))
+              " segments downloaded, "
+              (dom/span #js {:className "segments"}
+                (get file :decoded-segments) "/"
+                (:total-segments file))
+              " segments decoded"))
 
-                     :else
-                     "bg-success")]
-        (dom/li #js {:className status
-                     :title filename}
-          (condp = (:status file)
-            :pending
-            "..."
-
-            :downloading
-            (str (:downloaded-segments file) "/" (:total-segments file))
-
-            :decoding
-            (str (:decoded-segments file) "/" (:total-segments file))
-
-            :completed
-            (if success?
-              (dom/span #js {:className "glyphicon glyphicon-ok"})
-              (dom/span #js {:title (str (:downloaded-segments file) ", "
-                                      (:decoded-segments file))}
-                (:decode-failed-segments file) "! "
-                (:download-failed-segments file) "!"))
-
-            "")
-
-         ;; (dom/div #js {:className "icon pull-left"}
-         ;;   (when-let [s (file->glyphicon filename)]
-         ;;     (dom/span #js {:className (str "glyphicon glyphicon-" s)})))
-
-         ;; (dom/div #js {:className "pull-left"}
-         ;;   (dom/span #js {:className "filename"}
-         ;;     filename)
-
-         ;;   (dom/div nil
-         ;;     (dom/span #js {:className "segments"}
-         ;;       (get file :downloaded-segments) "/"
-         ;;       (:total-segments file))
-         ;;     " segments downloaded, "
-         ;;     (dom/span #js {:className "segments"}
-         ;;       (get file :decoded-segments) "/"
-         ;;       (:total-segments file))
-         ;;     " segments decoded"))
-
-         ;; (dom/div #js {:className "status pull-right"}
-         ;;   (label (get status->cls (:status file) :default)
-         ;;     (-> file :status name)
-         ;;     :title (:error file)))
+          (dom/div #js {:className "status pull-right"}
+            (label (get status->cls (:status file) :default)
+              (-> file :status name)
+              :title (:error file)))
          (dom/div #js {:className "clearfix"}))))))
 
 (defn files-section
@@ -240,11 +191,11 @@
   (reify
     om/IRender
     (render [_]
-      (dom/div #js {:className "col-md-12"}
-        (dom/div #js {:id "files"}
-          (apply dom/ul #js {:id "files"
-                             :className "list-unstyled"}
-            (om/build-all file-row (sort files))))))))
+      (dom/div #js {:className "col-md-6"}
+        (dom/h2 nil "Files")
+        (apply dom/ul #js {:id        "files"
+                           :className "list-unstyled"}
+          (om/build-all file-row (sort files)))))))
 
 (defn leacher-app
   [{:keys [files settings websocket] :as app} owner]
@@ -265,11 +216,11 @@
 
     om/IRenderState
     (render-state [this {:keys [ws ws-msgs]}]
-      (dom/div #js {:className "container-fluid"}
-        (dom/div #js {:className "col-xs-12"}
+      (dom/div nil
+        (connection-status websocket)
+        (dom/div #js {:className "container-fluid"}
           (dom/div #js {:className "row"}
-            (connection-status websocket))
-          (om/build files-section files))))))
+            (om/build files-section files)))))))
 
 (defn init
   []
