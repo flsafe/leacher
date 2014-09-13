@@ -20,16 +20,20 @@ ul#key li {
     display: inline;
 }
 
+ul#workers {
+    float: left;
+}
+
 ul#workers li {
     float: left;
-    width: 10px;
-    height: 10px;
+    width: 15px;
+    height: 15px;
     margin: 0 1px 1px 0;
 }
 
 .connecting  { background: #f0ad4e; }
-.waiting     { background: #999; }
-.downloading { background: #5cb85c; }
+.waiting     { background: #5bc0de; }
+.working     { background: #5cb85c; }
 .error       { background: #d9534f; }
 
 ul#files li {
@@ -46,4 +50,8 @@ ul#files li {
 
 .filename {
     font-weight: bold;
+}
+
+dl#settings {
+
 }

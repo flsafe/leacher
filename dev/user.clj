@@ -10,10 +10,9 @@
 (defonce system nil)
 
 (defn init []
-  (let [config (edn/read-string (slurp (io/file cfg/home-dir "config.edn")))]
-    (alter-var-root #'system
-      (constantly (app/new-leacher-system config)))
-    nil))
+  (alter-var-root #'system
+    (constantly (app/new-leacher-system)))
+  nil)
 
 (defn start []
   (alter-var-root #'system component/start)
@@ -34,6 +33,7 @@
 
 (comment
   (go)
+  (start)
   (reset)
   (init)
   (stop)

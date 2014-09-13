@@ -49,9 +49,9 @@
 
 (defn new-connection
   [opts]
-  (case (:type opts)
-    :real (new-nntp-connection opts)
-    :stub (new-stub-connection opts)))
+  (if (= :stub (:type opts))
+    (new-stub-connection opts)
+    (new-nntp-connection opts)))
 
 (comment
 

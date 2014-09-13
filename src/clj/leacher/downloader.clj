@@ -56,11 +56,17 @@
     conn))
 
 (defn start-worker
-  [settings {:keys [downloads shutdown]} n]
+  [settings {:keys [downloads shutdown events]} n]
   (thread
     (log/infof "worker[%d]: starting" n)
+    (put! events {:type   :worker-status
+                  :worker n
+                  :status :connecting})
     (loop [conn (connect-to-nntp settings n)]
       (log/debugf "worker[%d] waiting" n)
+      (put! events {:type   :worker-status
+                    :worker n
+                    :status :waiting})
       (alt!!
         shutdown
         ([_]
@@ -70,6 +76,9 @@
         ([{:keys [file segment reply events] :as work}]
            (when work
              (log/debugf "worker[%d]: got segment %s" n (:message-id segment))
+             (put! events {:type   :worker-status
+                           :worker n
+                           :status :working})
              (>!! reply
                (try
                  (log/debugf "worker[%d]: downloading %s" n (:message-id segment))

@@ -21,6 +21,7 @@
 
 (def app-state (atom {:websocket :disconnected
                       :settings  {}
+                      :workers   []
                       :files     {}}))
 
 ;; ws handling
@@ -83,7 +84,10 @@
     (swap! state update-in [:files filename]
       (fn [m] (-> m
                (update-in [:decode-failed-segments] inc)
-               (update-in [:errors] conj (:message data)))))))
+               (update-in [:errors] conj (:message data)))))
+
+    :worker-status
+    (swap! state assoc-in [:workers (:worker data)] (:status data))))
 
 (defn handle-event
   [{:keys [type data] :as e}]
@@ -192,13 +196,54 @@
     om/IRender
     (render [_]
       (dom/div #js {:className "col-md-6"}
-        (dom/h2 nil "Files")
-        (apply dom/ul #js {:id        "files"
-                           :className "list-unstyled"}
-          (om/build-all file-row (sort files)))))))
+        (dom/h4 nil "Files")
+        (if (zero? (count files))
+          (dom/p nil "No files to show, start downloading something!")
+          (apply dom/ul #js {:id        "files"
+                             :className "list-unstyled"}
+            (om/build-all file-row (sort files))))))))
+
+(defn settings-section
+  [settings _]
+  (reify
+    om/IRender
+    (render [_]
+      (dom/div #js {:className "col-md-4"}
+        (dom/dl #js {:id "settings"}
+          (dom/dt nil "Host")
+          (dom/dd nil (:host settings))
+
+          (dom/dt nil "Port")
+          (dom/dd nil (:port settings))
+
+          (dom/dt nil "User")
+          (dom/dd nil (:user settings))
+
+          (dom/dt nil "SSL?")
+          (dom/dd nil (str (:ssl? settings)))
+
+          (dom/dt nil "Max Connections")
+          (dom/dd nil (str (:max-connections settings))))))))
+
+(defn worker-item
+  [worker _]
+  (reify
+    om/IRender
+    (render [_]
+      (dom/li #js {:className (name worker)}))))
+
+(defn workers-section
+  [workers settings _]
+  (reify
+    om/IRender
+    (render [_]
+      (dom/div #js {:className "col-md-12"}
+        (apply dom/ul #js {:id "workers" :className "list-unstyled"}
+          (om/build-all worker-item workers))
+        (dom/div #js {:className "clearfix"})))))
 
 (defn leacher-app
-  [{:keys [files settings websocket] :as app} owner]
+  [{:keys [files workers settings websocket] :as app} owner]
   (reify
     om/IInitState
     (init-state [_]
@@ -220,6 +265,9 @@
         (connection-status websocket)
         (dom/div #js {:className "container-fluid"}
           (dom/div #js {:className "row"}
+            (om/build workers-section workers))
+          (dom/div #js {:className "row"}
+            (om/build settings-section settings)
             (om/build files-section files)))))))
 
 (defn init

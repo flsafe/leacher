@@ -12,16 +12,15 @@
 ;; events
 
 (defn initial-event
-  [files settings]
+  [state settings]
   (pr-str {:type :initial
-           :data {:files    files
-                  :settings settings}}))
+           :data (assoc state :settings settings)}))
 
 (defn merge-state
   [state {:keys [type filename file status] :as data}]
   (case type
     :download-pending
-    (swap! state assoc (:filename file)
+    (swap! state assoc-in [:files (:filename file)]
       (-> file
         (assoc :status :pending
                :downloaded-segments 0
@@ -32,25 +31,28 @@
         (dissoc :segments)))
 
     :file-status
-    (swap! state assoc-in [filename :status] status)
+    (swap! state assoc-in [:files filename :status] status)
 
     :segment-download-complete
-    (swap! state update-in [filename :downloaded-segments] inc)
+    (swap! state update-in [:files filename :downloaded-segments] inc)
 
     :segment-download-failed
-    (swap! state update-in [filename]
+    (swap! state update-in [:files filename]
       (fn [m] (-> m
                 (update-in [:download-failed-segments] inc)
                 (update-in [:errors] conj (:message data)))))
 
     :segment-decode-complete
-    (swap! state update-in [filename :decoded-segments] inc)
+    (swap! state update-in [:files filename :decoded-segments] inc)
 
     :segment-decode-failed
-    (swap! state update-in [filename]
+    (swap! state update-in [:files filename]
       (fn [m] (-> m
                 (update-in [:decode-failed-segments] inc)
-                (update-in [:errors] conj (:message data)))))))
+                (update-in [:errors] conj (:message data)))))
+
+    :worker-status
+    (swap! state assoc-in [:workers (:worker data)] (:status data))))
 
 (defn start-publisher
   [clients state {:keys [events shutdown]}]
@@ -96,7 +98,8 @@
     (if stop-server-fn
       this
       (let [clients        (atom #{})
-            state          (atom {})
+            state          (atom {:files   {}
+                                  :workers (vec (repeat (stg/get-setting settings :max-connections) :unknown))})
             stop-server-fn (run-server #(ws-handler clients state settings %) {:port 8091})]
         (log/info "starting")
         (start-publisher clients state channels)
