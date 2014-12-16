@@ -2,9 +2,7 @@
   (:require-macros [cljs.core.async.macros :refer [go go-loop]])
   (:require [goog.events :as events]
             [cljs.core.async :refer [put! <! chan close!]]
-            [om.core :as om :include-macros true]
-            [om.dom :as dom :include-macros true]
-            [secretary.core :as secretary]
+            [reagent.core :as reagent :refer [atom]]
             [clojure.string :as string]
             [cljs.reader :refer [read-string]]
             [goog.net.WebSocket]
@@ -143,134 +141,88 @@
 
 (defn label
   [cls text & {:as attrs}]
-  (dom/span (clj->js (merge {:className (str "label label-" (name cls))}
-                       attrs))
-    text))
-
-(defn badge
-  [text]
-  (dom/span #js {:className "badge"}
-    text))
+  [:span (merge attrs :class (str "label label-" (name cls)))
+   text])
 
 (defn connection-status
-  [status]
-  (dom/div #js {:id        "connection-status"
-                :className (name status)}))
+  []
+  [:div#connection-status {:class (name (@app-state :websocket))}])
 
 (defn file-row
-  [[filename file] _]
-  (reify
-    om/IRender
-    (render [_]
-      (let [success? (and (zero? (:decode-failed-segments file))
-                       (zero? (:download-failed-segments file)))]
-        (dom/li nil
+  [filename file]
+  (let [success? (and (zero? (:decode-failed-segments file))
+                   (zero? (:download-failed-segments file)))]
+    [:li
 
-          (dom/div #js {:className "icon pull-left"}
-            (when-let [s (file->glyphicon filename)]
-              (dom/span #js {:className (str "glyphicon glyphicon-" s)})))
+     [:div.icon.pull-left
+      (when-let [s (file->glyphicon filename)]
+        [:span {:class (str "glyphicon glyphicon-" s)}])]
 
-          (dom/div #js {:className "pull-left"}
-            (dom/span #js {:className "filename"}
-              filename)
+     [:div.pull-left
+      [:span.filename filename]]
 
-            (dom/div nil
-              (dom/span #js {:className "segments"}
-                (get file :downloaded-segments) "/"
-                (:total-segments file))
-              " segments downloaded, "
-              (dom/span #js {:className "segments"}
-                (get file :decoded-segments) "/"
-                (:total-segments file))
-              " segments decoded"))
+     [:div.status.pull-right
+      [:span {:class (str "label label-" (name (get status->cls (:status file) :default)))
+              :title (:error file)}
+       (-> file :status name)]]
 
-          (dom/div #js {:className "status pull-right"}
-            (label (get status->cls (:status file) :default)
-              (-> file :status name)
-              :title (:error file)))
-         (dom/div #js {:className "clearfix"}))))))
+     [:div.clearfix]]))
 
 (defn files-section
-  [files _]
-  (reify
-    om/IRender
-    (render [_]
-      (dom/div #js {:className "col-md-6"}
-        (dom/h4 nil "Files")
-        (if (zero? (count files))
-          (dom/p nil "No files to show, start downloading something!")
-          (apply dom/ul #js {:id        "files"
-                             :className "list-unstyled"}
-            (om/build-all file-row (sort files))))))))
+  [files]
+  [:div.col-md-6
+   [:h4 "Files"]
+   (if (zero? (count files))
+     [:p "No files to show, start downloading something!"]
+     [:ul#files.list-unstyled
+      (for [[filename file] files]
+        [file-row filename file])])])
 
 (defn settings-section
-  [settings _]
-  (reify
-    om/IRender
-    (render [_]
-      (dom/div #js {:className "col-md-4"}
-        (dom/dl #js {:id "settings"}
-          (dom/dt nil "Host")
-          (dom/dd nil (:host settings))
+  [settings]
+  [:div.col-md-4
+   [:dl#settings
+    [:dt "Host"]
+    [:dd (:host settings)]
 
-          (dom/dt nil "Port")
-          (dom/dd nil (:port settings))
+    [:dt "Port"]
+    [:dd (:port settings)]
 
-          (dom/dt nil "User")
-          (dom/dd nil (:user settings))
+    [:dt "User"]
+    [:dd (:user settings)]
 
-          (dom/dt nil "SSL?")
-          (dom/dd nil (str (:ssl? settings)))
+    [:dt "SSL?"]
+    [:dd (str (:ssl? settings))]
 
-          (dom/dt nil "Max Connections")
-          (dom/dd nil (str (:max-connections settings))))))))
-
-(defn worker-item
-  [worker _]
-  (reify
-    om/IRender
-    (render [_]
-      (dom/li #js {:className (name worker)}))))
+    [:dt "Max Connections"]
+    [:dd (str (:max-connections settings))]]])
 
 (defn workers-section
-  [workers settings _]
-  (reify
-    om/IRender
-    (render [_]
-      (dom/div #js {:className "col-md-12"}
-        (apply dom/ul #js {:id "workers" :className "list-unstyled"}
-          (om/build-all worker-item workers))
-        (dom/div #js {:className "clearfix"})))))
+  []
+  [:div.col-md-12
+   [:ul#workers.list-unstyled
+    (for [worker (@app-state :workers)]
+      [:li {:class (name worker)}])]
+   [:div.clearfix]])
 
 (defn leacher-app
-  [{:keys [files workers settings websocket] :as app} owner]
-  (reify
-    om/IInitState
-    (init-state [_]
-      {:ws      nil
-       :ws-msgs (chan)})
-
-    om/IWillMount
-    (will-mount [this]
-      (let [{:keys [in out] :as ws} (ws-chan)]
-        (om/set-state! owner :ws ws)
-        (go-loop []
-          (when-let [e (<! out)]
-            (handle-event e)
-            (recur)))))
-
-    om/IRenderState
-    (render-state [this {:keys [ws ws-msgs]}]
-      (dom/div nil
-        (connection-status websocket)
-        (dom/div #js {:className "container-fluid"}
-          (dom/div #js {:className "row"}
-            (om/build workers-section workers))
-          (dom/div #js {:className "row"}
-            (om/build settings-section settings)
-            (om/build files-section files)))))))
-
-(defn init
   []
-  (om/root leacher-app app-state
-    {:target (.getElementById js/document "app")}))
+  (let [{:keys [in out]} (ws-chan)
+        ws-msgs          (chan)]
+    (go-loop []
+      (when-let [e (<! out)]
+        (handle-event e)
+        (recur)))
+    (fn []
+      [:div
+       [connection-status app-state]
+       [:div.container-fluid
+        [:div.row [workers-section]]
+        [:div.row
+         [settings-section (@app-state :settings)]
+         [files-section (@app-state :files)]]]])))
+
+(defn ^:export run
+  []
+  (reagent/render-component [leacher-app]
+    (.getElementById js/document "app")))

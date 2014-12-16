@@ -19,11 +19,12 @@
    [:body.base3
     [:div#app]
     (include-js
-      "js/react.js"
+      ;; "js/react.js"
       "js/moment.js"
       "js/app.js")
     [:script
-     "leacher.ui.app.init();"]]))
+     "leacher.ui.app.run();"]
+    ]))
 
 (defn build-routes
   []

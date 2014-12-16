@@ -25,9 +25,8 @@
                  [compojure "1.1.6"]
 
                  ;; cljs stuff
-                 [org.clojure/clojurescript "0.0-2202"]
-                 [om "0.5.3"]
-                 [secretary "1.1.0"]
+                 [org.clojure/clojurescript "0.0-2342"]
+                 [reagent "0.5.0-alpha"]
 
                  ;; omg logging
                  [log4j "1.2.17"]]
@@ -48,6 +47,7 @@
 
   :cljsbuild {:builds [{:id           "dev"
                         :source-paths ["src/cljs"]
-                        :compiler     {:output-to     "resources/public/js/app.js"
+                        :compiler     {:preamble      ["reagent/react.js"]
+                                       :output-to     "resources/public/js/app.js"
                                        :output-dir    "resources/public/out-dev"
                                        :optimizations :whitespace}}]})

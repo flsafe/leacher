@@ -20,14 +20,16 @@
    :ssl?            #(= "true" %)
    :max-connections #(Long. ^String %)})
 
-;; TODO not threadsafe
+(def file-lock (Object.))
+
 (defn write-settings
   [m]
-  (let [f (fs/file config/settings-file)]
-    (with-open [w ^java.io.BufferedWriter (io/writer f)]
-      (doseq [[k v] m]
-        (.write w (str (name k) ": " v))
-        (.newLine w)))))
+  (locking file-lock
+    (let [f (fs/file config/settings-file)]
+      (with-open [w ^java.io.BufferedWriter (io/writer f)]
+        (doseq [[k v] m]
+          (.write w (str (name k) ": " v))
+          (.newLine w))))))
 
 (defn ensure-settings
   []
@@ -39,7 +41,7 @@
 (defn read-settings
   []
   (ensure-settings)
-  (-> (slurp config/settings-file)
+  (-> (locking file-lock (slurp config/settings-file))
     (string/split #"\n")
     (->> (map #(string/split % #":"))
       (reduce #(assoc %1 (keyword (first %2))
@@ -81,7 +83,7 @@
   @(:state settings))
 
 (comment
-  
+
   (let [s (component/start (new-settings))]
     (println s)
     (component/stop s))
