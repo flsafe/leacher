@@ -110,12 +110,13 @@
 ;; page elements
 
 (def status->cls
-  {:downloading :warning
-   :completed   :success
-   :error       :danger
-   :failed      :danger
-   :decoding    :primary
-   :cleaning    :info})
+  {:downloading     :warning
+   :completed       :success
+   :download-errors :danger
+   :error           :danger
+   :failed          :danger
+   :decoding        :primary
+   :cleaning        :info})
 
 (defn file->glyphicon
   [filename]
@@ -159,7 +160,10 @@
         [:span {:class (str "glyphicon glyphicon-" s)}])]
 
      [:div.pull-left
-      [:span.filename filename]]
+      [:div.filename filename]
+      [:div (:downloaded-segments file) "/" (:total-segments file)
+       (when (> (:download-failed-segments file) 0)
+         "(" (:download-failed-segments file) " failed)")]]
 
      [:div.status.pull-right
       [:span {:class (str "label label-" (name (get status->cls (:status file) :default)))
@@ -175,8 +179,8 @@
    (if (zero? (count files))
      [:p "No files to show, start downloading something!"]
      [:ul#files.list-unstyled
-      (for [[filename file] files]
-        [file-row filename file])])])
+      (for [[filename file] (sort files)]
+        ^{:key filename} [file-row filename file])])])
 
 (defn settings-section
   [settings]
