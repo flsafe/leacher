@@ -163,7 +163,7 @@
       [:div.filename filename]
       [:div (:downloaded-segments file) "/" (:total-segments file)
        (when (> (:download-failed-segments file) 0)
-         "(" (:download-failed-segments file) " failed)")]]
+         [:span.failures (str " (" (:download-failed-segments file) " failed)")])]]
 
      [:div.status.pull-right
       [:span {:class (str "label label-" (name (get status->cls (:status file) :default)))

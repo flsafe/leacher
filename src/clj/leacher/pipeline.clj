@@ -85,31 +85,22 @@
     (log/infof "waiting for downloads of %d segments for %s"
       (:total-segments file) filename)
     (let [replies (async/take (:total-segments file) reply)
-          errors  (atom 0)
           result  (loop [result file]
                     (if-let [{:keys [error downloaded-path segment]} (<!! replies)]
                       (recur (cond
                                error
-                               (do
-                                 (swap! errors inc)
-                                 (assoc-in result [:segments (:message-id segment)
-                                                   :error] error))
+                               (assoc-in result [:segments (:message-id segment)
+                                                 :error] error)
 
                                downloaded-path
                                (assoc-in result [:segments (:message-id segment)
                                                  :downloaded-path]
                                  downloaded-path)))
                       result))]
-      (if-not (zero? @errors)
-        ;; signal failure, and do not continue on to decode
-        (put! events {:type     :file-status
-                      :status   :download-errors
-                      :filename filename})
-        (do
-          (put! events {:type     :file-status
-                        :status   :download-complete
-                        :filename filename})
-          result)))))
+      (put! events {:type     :file-status
+                    :status   :download-complete
+                    :filename filename})
+      result)))
 
 (defn process-file
   [file {:keys [events] :as channels}]
